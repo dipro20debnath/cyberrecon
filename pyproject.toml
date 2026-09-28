@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyberrecon-pro"
+version = "1.1.0"
+description = "Passive-first reconnaissance toolkit with guarded active checks"
+requires-python = ">=3.10"
+dependencies = [
+  "typer>=0.9.0",
+  "rich>=13.0.0",
+  "requests>=2.31.0",
+  "dnspython>=2.4.0",
+  "python-whois>=0.8.0",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4.0", "pytest-cov>=4.1.0"]
+
+[project.scripts]
+cyberrecon = "cyberrecon.cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+include = ["cyberrecon*"]

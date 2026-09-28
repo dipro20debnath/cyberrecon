@@ -1,134 +1,113 @@
-"""
-CyberRecon Pro - Main CLI Interface
-"""
+"""Command-line interface for CyberRecon Pro."""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.text import Text
 from rich.table import Table
-from pathlib import Path
 
-# এই line ঠিক করো - Config class import করো
-from cyberrecon.config import Config, config
+from cyberrecon.config import Config, ConfigError, config
+from cyberrecon.reporting import ReportError, write_report
+from cyberrecon.scanner import ReconScanner, ScanError
+
 
 app = typer.Typer(
     name="cyberrecon",
-    help="🔍 CyberRecon Pro - Advanced Reconnaissance Tool",
-    add_completion=False
+    help="CyberRecon Pro - modular reconnaissance toolkit",
+    add_completion=False,
+    no_args_is_help=True,
 )
 console = Console()
 
-def print_banner():
-    """Print logo banner"""
-    banner = """
-    ╔══════════════════════════════════════════════════════════╗
-    ║      🔍 CYBERRECON PRO - Advanced Reconnaissance        ║
-    ║                                                          ║
-    ║   Domain • Subdomain • IP • Technology Intelligence     ║
-    ╚══════════════════════════════════════════════════════════╝
-    """
-    console.print(Panel(
-        Text(banner, style="cyan"),
-        title="[bold green]Welcome[/bold green]",
-        border_style="blue"
-    ))
+
+def print_banner() -> None:
+    console.print(Panel("CYBERRECON PRO\nPassive-first reconnaissance toolkit", title="CyberRecon", border_style="blue"))
+
 
 @app.callback()
 def main(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-    config_file: str = typer.Option("config.yaml", "--config", "-c", help="Config file path")
-):
-    """CyberRecon Pro - Complete reconnaissance solution"""
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
+    config_file: str = typer.Option("config.yaml", "--config", "-c", help="Configuration file path"),
+) -> None:
     global config
-    config = Config(config_file)
-    
+    try:
+        config = Config(config_file)
+    except ConfigError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--config") from exc
     if verbose:
-        console.print("[yellow]Verbose mode enabled[/yellow]")
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        console.print(f"Config: {config.config_path}")
+
 
 @app.command()
 def scan(
-    target: str = typer.Argument(..., help="Target domain or IP address"),
-    mode: str = typer.Option("passive", "--mode", "-m", help="Scan mode: passive, active, full"),
-    output: str = typer.Option("json", "--output", "-o", help="Output format: json, csv, html"),
-    threads: int = typer.Option(50, "--threads", "-t", help="Number of threads")
-):
-    """
-    🎯 Start reconnaissance scan on a target
-    """
+    target: str = typer.Argument(..., help="Domain name or IP address"),
+    mode: str = typer.Option("passive", "--mode", "-m", help="passive, active or full"),
+    output: str = typer.Option("json", "--output", "-o", help="json, csv or html"),
+    confirm_active: bool = typer.Option(False, "--confirm-active", help="Confirm you are authorized for active checks"),
+) -> None:
+    """Run a reconnaissance scan and save a report."""
+
     print_banner()
-    
-    console.print(f"\n[bold blue]Target:[/bold blue] {target}")
-    console.print(f"[bold blue]Mode:[/bold blue] {mode}")
-    console.print(f"[bold blue]Output:[/bold blue] {output}")
-    console.print(f"[bold blue]Threads:[/bold blue] {threads}\n")
-    
-    console.print("[yellow]⚠️  Scanner module will be implemented in upcoming days![/yellow]")
+    if output.lower().lstrip(".") not in {"json", "csv", "html"}:
+        console.print("[red]Scan failed:[/red] Output format must be json, csv or html")
+        raise typer.Exit(code=2)
+    try:
+        results = ReconScanner(config).scan(target, mode=mode, confirm_active=confirm_active)
+        path = write_report(results, config.output_dir, target, output)
+    except (ScanError, ReportError, ConfigError, PermissionError, OSError) as exc:
+        console.print(f"[red]Scan failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    table = Table(title="Scan summary")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Target", str(results.get("target")))
+    table.add_row("Mode", str(results.get("mode")))
+    table.add_row("Modules", str(len(results.get("modules", {}))))
+    table.add_row("Errors", str(len(results.get("errors", []))))
+    table.add_row("Report", str(path))
+    console.print(table)
+
 
 @app.command(name="config-show")
-def config_show():
-    """
-    ⚙️  Show current configuration
-    """
-    table = Table(title="Current Configuration")
-    table.add_column("Setting", style="cyan")
-    table.add_column("Value", style="green")
-    
-    table.add_row("Config File", str(config.config_path))
-    table.add_row("Threads", str(config.threads))
-    table.add_row("Timeout", f"{config.timeout}s")
-    table.add_row("Output Directory", str(config.output_dir))
-    table.add_row("VirusTotal API", "✅ Set" if config.get_api_key('virustotal') else "❌ Not Set")
-    table.add_row("Shodan API", "✅ Set" if config.get_api_key('shodan') else "❌ Not Set")
-    
-    console.print(table)
+def config_show() -> None:
+    """Show the effective configuration with secrets redacted."""
+
+    console.print(json.dumps(config.redacted(), indent=2, ensure_ascii=False))
+
 
 @app.command(name="config-set")
 def config_set(
-    key: str = typer.Argument(..., help="Config key (e.g., api_keys.virustotal)"),
-    value: str = typer.Argument(..., help="Config value")
-):
-    """
-    📝 Set configuration value
-    """
-    config.set(key, value)
-    console.print(f"[green]✅ Set {key} = {value}[/green]")
+    key: str = typer.Argument(..., help="Dotted config key, for example settings.timeout"),
+    value: str = typer.Argument(..., help="Value; YAML scalar syntax is accepted"),
+) -> None:
+    """Set a configuration value."""
+
+    try:
+        config.set(key, value)
+    except ConfigError as exc:
+        console.print(f"[red]Config update failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    console.print(f"Updated {key}")
+
 
 @app.command()
-def init():
-    """
-    🚀 Initialize CyberRecon Pro (create config, download wordlists)
-    """
-    print_banner()
-    
-    console.print("\n[bold yellow]Initializing CyberRecon Pro...[/bold yellow]\n")
-    
-    # Create config file
-    if not Path("config.yaml").exists():
-        # ফাঁকা create করো, পরবর্তীতে default ব্যবহার হবে
-        console.print("[green]✅ Config file will be created on first use[/green]")
-    else:
-        console.print("[yellow]⚠️  Config file already exists[/yellow]")
-    
-    # Create directories
-    Path("reports").mkdir(exist_ok=True)
-    Path("wordlists").mkdir(exist_ok=True)
-    Path("tests").mkdir(exist_ok=True)
-    
-    console.print("[green]✅ Directories created[/green]")
-    console.print("\n[bold cyan]Next steps:[/bold cyan]")
-    console.print("1. Edit config.yaml and add your API keys")
-    console.print("2. Run: python -m cyberrecon scan example.com")
-    
-    # Download basic wordlist
-    import urllib.request
-    wordlist_url = "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/DNS/subdomains-top1million-20000.txt"
-    
-    try:
-        console.print("\n[yellow]📥 Downloading subdomain wordlist...[/yellow]")
-        urllib.request.urlretrieve(wordlist_url, "wordlists/subdomains.txt")
-        console.print("[green]✅ Wordlist downloaded: wordlists/subdomains.txt[/green]")
-    except Exception as e:
-        console.print(f"[red]❌ Failed to download wordlist: {e}[/red]")
+def init() -> None:
+    """Create or repair config and required directories."""
+
+    config.save()
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    for relative in ("wordlists", "tests"):
+        (config.config_path.parent / relative).mkdir(parents=True, exist_ok=True)
+    console.print(f"Initialized configuration at {config.config_path}")
+    console.print(f"Reports directory: {config.output_dir}")
+
 
 if __name__ == "__main__":
     app()

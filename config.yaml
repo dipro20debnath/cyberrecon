@@ -1,0 +1,45 @@
+api_keys:
+  virustotal: ''
+  securitytrails: ''
+  shodan: ''
+  censys: ''
+  urlscan: ''
+  ipinfo: ''
+wordlists:
+  subdomains: wordlists/subdomains.txt
+  dns: wordlists/dns-names.txt
+  ports: wordlists/top-ports.txt
+settings:
+  timeout: 10
+  threads: 20
+  rate_limit: 1.0
+  max_retries: 2
+  cache_ttl: 3600
+  user_agent: CyberRecon-Pro/1.0
+output:
+  default_format: json
+  save_directory: reports
+  screenshots: false
+active:
+  enabled: false
+  allowed_targets: []
+  allow_private_targets: false
+  check_zone_transfer: false
+  ports:
+  - 21
+  - 22
+  - 25
+  - 53
+  - 80
+  - 110
+  - 143
+  - 443
+  - 445
+  - 587
+  - 993
+  - 995
+  - 3306
+  - 5432
+  - 6379
+  - 8080
+  - 8443

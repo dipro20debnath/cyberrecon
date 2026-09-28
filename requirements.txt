@@ -1,28 +1,14 @@
-# CLI Framework
-click>=8.1.0
+# Runtime
 typer>=0.9.0
 rich>=13.0.0
-
-# HTTP & Async
 requests>=2.31.0
-aiohttp>=3.8.0
-aiofiles>=23.0.0
-
-# DNS & Network
 dnspython>=2.4.0
 python-whois>=0.8.0
-python-nmap>=0.7.1
-
-# Data Parsing
-beautifulsoup4>=4.12.0
-lxml>=4.9.0
 pyyaml>=6.0
 
-# Utilities
-tqdm>=4.66.0
-colorama>=0.4.6
-tabulate>=0.9.0
-
-# Testing
+# Development
 pytest>=7.4.0
-pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Optional screenshots
+# playwright>=1.40.0

@@ -1,0 +1,38 @@
+"""Conservative heuristic risk indicators, not a vulnerability scanner."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+SENSITIVE_PORTS = {21, 23, 25, 110, 143, 445, 3306, 5432, 6379, 9200, 27017}
+
+
+def assess(results: dict[str, Any]) -> dict[str, Any]:
+    score = 0
+    indicators: list[dict[str, Any]] = []
+    dns = results.get("modules", {}).get("dns", {})
+    if dns.get("zone_transfer", {}).get("vulnerable"):
+        score += 40
+        indicators.append({"severity": "high", "name": "zone_transfer", "message": "Authoritative DNS server allowed AXFR"})
+
+    active = results.get("modules", {}).get("active", {})
+    open_ports = [item.get("port") for item in active.get("ports", {}).get("ports", []) if item.get("state") == "open"]
+    sensitive = sorted(set(open_ports) & SENSITIVE_PORTS)
+    if sensitive:
+        score += min(40, 10 * len(sensitive))
+        indicators.append({"severity": "medium", "name": "sensitive_ports", "ports": sensitive})
+
+    technology = results.get("modules", {}).get("technology", {})
+    if technology.get("headers", {}).get("X-Powered-By"):
+        score += 5
+        indicators.append({"severity": "low", "name": "technology_disclosure", "message": "X-Powered-By header is exposed"})
+
+    score = min(100, score)
+    severity = "low" if score < 20 else "medium" if score < 50 else "high" if score < 80 else "critical"
+    return {
+        "score": score,
+        "severity": severity,
+        "indicators": indicators,
+        "method": "heuristic indicators only; validate findings manually",
+    }
