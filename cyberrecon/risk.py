@@ -28,6 +28,18 @@ def assess(results: dict[str, Any]) -> dict[str, Any]:
         score += 5
         indicators.append({"severity": "low", "name": "technology_disclosure", "message": "X-Powered-By header is exposed"})
 
+    security = technology.get("security", {})
+    security_findings = security.get("findings", [])
+    if security_findings:
+        score += min(25, sum(2 if item.get("severity") == "medium" else 1 for item in security_findings))
+        indicators.append({"severity": "low", "name": "http_security_headers", "count": len(security_findings)})
+
+    tls = results.get("modules", {}).get("tls", {})
+    days_until_expiry = tls.get("certificate", {}).get("days_until_expiry")
+    if isinstance(days_until_expiry, int) and days_until_expiry < 14:
+        score += 15
+        indicators.append({"severity": "medium", "name": "certificate_expiry", "days_until_expiry": days_until_expiry})
+
     score = min(100, score)
     severity = "low" if score < 20 else "medium" if score < 50 else "high" if score < 80 else "critical"
     return {

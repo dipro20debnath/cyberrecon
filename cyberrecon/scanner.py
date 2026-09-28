@@ -10,7 +10,7 @@ from cyberrecon.config import Config
 from cyberrecon.integrations import ExternalIntelligence
 from cyberrecon.risk import assess
 from cyberrecon.modules.active import PortScanner, SubdomainBruteForcer, require_active_authorization
-from cyberrecon.modules.passive import DNSEnumerator, IPIntelligence, CrtshSubdomainFinder, TechnologyDetector, WHOISLookup
+from cyberrecon.modules.passive import DNSEnumerator, IPIntelligence, CrtshSubdomainFinder, TechnologyDetector, TLSInspector, WHOISLookup
 from cyberrecon.utils.serialization import to_jsonable
 from cyberrecon.utils.validators import TargetValidationError, normalize_target
 
@@ -52,6 +52,7 @@ class ReconScanner:
             "subdomains": lambda: CrtshSubdomainFinder(self.config.timeout, user_agent=self.config.user_agent).find_subdomains(info.value),
             "ip_intelligence": lambda: IPIntelligence(self.config.get_api_key("ipinfo"), self.config.timeout).lookup(info.value),
             "technology": lambda: TechnologyDetector(self.config.timeout, user_agent=self.config.user_agent).detect(info.value),
+            "tls": lambda: TLSInspector(self.config.timeout).inspect(info.value),
             "external_intelligence": lambda: ExternalIntelligence(self.config).collect(info.value),
         }
         if info.is_ip:

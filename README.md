@@ -40,6 +40,7 @@ grabbing. Only use it with written authorization.
 
 - `config.py`: validated, deep-merged YAML configuration with atomic writes
 - `modules/passive`: DNS, WHOIS, CT logs, IP intelligence and HTTP fingerprinting
+- `modules/passive`: TLS certificate inspection and HTTP security-header posture analysis
 - `integrations.py`: optional read-only VirusTotal, URLScan, SecurityTrails, Shodan and Censys lookups
 - `modules/active.py`: guarded wordlist DNS resolution and bounded TCP probes
 - `reporting.py`: JSON, CSV and self-contained HTML reports

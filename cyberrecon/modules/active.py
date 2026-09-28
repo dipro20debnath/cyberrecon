@@ -81,6 +81,13 @@ class SubdomainBruteForcer:
 
 
 class PortScanner:
+    SERVICE_NAMES = {
+        21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns",
+        80: "http", 110: "pop3", 143: "imap", 443: "https", 445: "smb",
+        587: "submission", 993: "imaps", 995: "pop3s", 3306: "mysql",
+        5432: "postgresql", 6379: "redis", 8080: "http-alt", 8443: "https-alt",
+    }
+
     def __init__(self, timeout: float = 1.0, workers: int = 50):
         self.timeout = max(0.1, float(timeout))
         self.workers = max(1, min(int(workers), 100))
@@ -95,11 +102,11 @@ class PortScanner:
             started = time.perf_counter()
             try:
                 with socket.create_connection((info.value, port), timeout=self.timeout):
-                    return {"port": port, "state": "open", "latency_ms": round((time.perf_counter() - started) * 1000, 2)}
+                    return {"port": port, "service": self.SERVICE_NAMES.get(port, "unknown"), "state": "open", "latency_ms": round((time.perf_counter() - started) * 1000, 2)}
             except (TimeoutError, socket.timeout):
-                return {"port": port, "state": "filtered"}
+                return {"port": port, "service": self.SERVICE_NAMES.get(port, "unknown"), "state": "filtered"}
             except OSError as exc:
-                return {"port": port, "state": "closed", "error": str(exc)}
+                return {"port": port, "service": self.SERVICE_NAMES.get(port, "unknown"), "state": "closed", "error": str(exc)}
 
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             results = list(pool.map(probe, values))

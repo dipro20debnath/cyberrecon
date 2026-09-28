@@ -6,6 +6,8 @@ from cyberrecon.modules.passive.whois_lookup import WHOISLookup
 from cyberrecon.modules.passive.subdomain_crtsh import CrtshSubdomainFinder
 from cyberrecon.modules.passive.ip_intelligence import IPIntelligence
 from cyberrecon.modules.passive.technology import TechnologyDetector
+from cyberrecon.modules.passive.security import SecurityHeadersAuditor
+from cyberrecon.modules.passive.tls import TLSInspector
 
 __all__ = [
     "DNSEnumerator",
@@ -13,4 +15,6 @@ __all__ = [
     "CrtshSubdomainFinder",
     "IPIntelligence",
     "TechnologyDetector",
+    "SecurityHeadersAuditor",
+    "TLSInspector",
 ]

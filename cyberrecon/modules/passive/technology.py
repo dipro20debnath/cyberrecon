@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 import requests
 
+from cyberrecon.modules.passive.security import SecurityHeadersAuditor
 from cyberrecon.utils.validators import TargetValidationError, normalize_target
 
 
@@ -37,6 +37,7 @@ class TechnologyDetector:
             "final_url": None,
             "technologies": [],
             "headers": {},
+            "security": {},
             "error": None,
         }
         try:
@@ -81,5 +82,6 @@ class TechnologyDetector:
             "final_url": response.url,
             "technologies": sorted(detected),
             "headers": {key: value for key, value in response.headers.items() if key.lower() in {"server", "x-powered-by", "content-type", "strict-transport-security"}},
+            "security": SecurityHeadersAuditor.audit(response.headers, response.url),
         })
         return result
