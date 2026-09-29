@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import threading
@@ -115,6 +116,46 @@ class JsonHttpClient:
         }
         if self.cache:
             self.cache.set(key, payload)
+        return payload
+
+    def get_bytes(
+        self,
+        url: str,
+        *,
+        headers: Optional[dict[str, str]] = None,
+        params: Optional[dict[str, Any]] = None,
+        cache_key: Optional[str] = None,
+        raise_for_status: bool = True,
+    ) -> dict[str, Any]:
+        """Fetch binary content while preserving the shared retry/cache policy."""
+
+        key = cache_key or f"BYTES {url} {sorted((params or {}).items())}"
+        if self.cache:
+            cached = self.cache.get(key)
+            if isinstance(cached, dict) and "content_b64" in cached:
+                try:
+                    return {
+                        **cached,
+                        "content": base64.b64decode(str(cached["content_b64"]), validate=True),
+                    }
+                except (ValueError, TypeError):
+                    pass
+
+        response = self._request(url, headers=headers, params=params, raise_for_status=raise_for_status)
+        content = bytes(getattr(response, "content", b"") or b"")
+        payload = {
+            "content": content,
+            "status_code": getattr(response, "status_code", None),
+            "url": str(getattr(response, "url", url)),
+            "headers": dict(getattr(response, "headers", {}) or {}),
+        }
+        if self.cache:
+            self.cache.set(key, {
+                "content_b64": base64.b64encode(content).decode("ascii"),
+                "status_code": payload["status_code"],
+                "url": payload["url"],
+                "headers": payload["headers"],
+            })
         return payload
 
     def _request(self, url: str, *, headers: Optional[dict[str, str]] = None, params: Optional[dict[str, Any]] = None, raise_for_status: bool = True) -> requests.Response:

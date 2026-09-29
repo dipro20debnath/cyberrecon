@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from time import sleep
 
 import typer
 from rich.console import Console
@@ -14,9 +15,10 @@ from rich.table import Table
 
 from cyberrecon.config import Config, ConfigError, config
 from cyberrecon.diffing import ComparisonError, compare_reports, discover_json_reports, load_json_report
+from cyberrecon.doctor import diagnostics_summary, run_diagnostics
 from cyberrecon.history import HistoryError, collect_history
-from cyberrecon.policy import PolicyError, evaluate_gate
-from cyberrecon.reporting import ReportError, write_report
+from cyberrecon.policy import PolicyError, evaluate_gate, validate_fail_level
+from cyberrecon.reporting import ReportError, filter_findings, validate_min_severity, write_report
 from cyberrecon.scanner import ReconScanner, ScanError
 from cyberrecon.utils.validators import safe_filename
 
@@ -28,7 +30,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
-SUPPORTED_OUTPUTS = {"json", "csv", "html", "md", "markdown", "sarif"}
+SUPPORTED_OUTPUTS = {"json", "csv", "html", "pdf", "md", "markdown", "sarif"}
 
 
 def print_banner() -> None:
@@ -50,11 +52,35 @@ def main(
         console.print(f"Config: {config.config_path}")
 
 
+def _execute_scan(target: str, mode: str, confirm_active: bool, only: str = "", skip: str = "") -> dict:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task_id = progress.add_task("Preparing scan", total=1)
+
+        def update_progress(completed: int, total: int, label: str) -> None:
+            progress.update(task_id, total=total, completed=completed, description=label)
+
+        return ReconScanner(config).scan(
+            target,
+            mode=mode,
+            confirm_active=confirm_active,
+            progress_callback=update_progress,
+            only=only or None,
+            skip=skip or None,
+        )
+
+
 @app.command()
 def scan(
     target: str = typer.Argument(..., help="Domain name or IP address"),
     mode: str = typer.Option("passive", "--mode", "-m", help="passive, active or full"),
-    output: str = typer.Option("json", "--output", "-o", help="json, csv, html, md/markdown or sarif"),
+    output: str = typer.Option("json", "--output", "-o", help="json, csv, html, pdf, md/markdown or sarif"),
     confirm_active: bool = typer.Option(False, "--confirm-active", help="Confirm you are authorized for active checks"),
     baseline: str = typer.Option("", "--baseline", help="Previous JSON report to compare against"),
     only: str = typer.Option("", "--only", help="Comma-separated modules to run, for example dns,tls"),
@@ -65,30 +91,10 @@ def scan(
 
     print_banner()
     if output.lower().lstrip(".") not in SUPPORTED_OUTPUTS:
-        console.print("[red]Scan failed:[/red] Output format must be json, csv, html, md/markdown or sarif")
+        console.print("[red]Scan failed:[/red] Output format must be json, csv, html, pdf, md/markdown or sarif")
         raise typer.Exit(code=2)
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            task_id = progress.add_task("Preparing scan", total=1)
-
-            def update_progress(completed: int, total: int, label: str) -> None:
-                progress.update(task_id, total=total, completed=completed, description=label)
-
-            results = ReconScanner(config).scan(
-                target,
-                mode=mode,
-                confirm_active=confirm_active,
-                progress_callback=update_progress,
-                only=only or None,
-                skip=skip or None,
-            )
+        results = _execute_scan(target, mode, confirm_active, only, skip)
         suffix = "scan"
         if baseline.strip():
             baseline_path = Path(baseline).expanduser()
@@ -127,10 +133,84 @@ def scan(
 
 
 @app.command()
+def watch(
+    target: str = typer.Argument(..., help="Domain name or IP address"),
+    interval: int = typer.Option(3600, "--interval", help="Seconds between scans"),
+    iterations: int = typer.Option(1, "--iterations", "-n", help="Number of scans to run (1-1000)"),
+    mode: str = typer.Option("passive", "--mode", "-m", help="passive, active or full"),
+    output: str = typer.Option("json", "--output", "-o", help="json, csv, html, pdf, md/markdown or sarif"),
+    confirm_active: bool = typer.Option(False, "--confirm-active", help="Confirm you are authorized for active checks"),
+    baseline: str = typer.Option("", "--baseline", help="Initial JSON report for the first comparison"),
+    only: str = typer.Option("", "--only", help="Comma-separated modules to run"),
+    skip: str = typer.Option("", "--skip", help="Comma-separated modules to skip"),
+    fail_on: str = typer.Option("", "--fail-on", help="Exit 1 when risk reaches this severity"),
+    fail_on_change: bool = typer.Option(False, "--fail-on-change", help="Exit 1 when any comparison change is detected"),
+) -> None:
+    """Repeat passive scans and persist timestamp-independent, unique reports."""
+
+    print_banner()
+    if output.lower().lstrip(".") not in SUPPORTED_OUTPUTS:
+        console.print("[red]Watch failed:[/red] Output format must be json, csv, html, pdf, md/markdown or sarif")
+        raise typer.Exit(code=2)
+    if interval < 0:
+        console.print("[red]Watch failed:[/red] Interval cannot be negative")
+        raise typer.Exit(code=2)
+    if iterations < 1 or iterations > 1000:
+        console.print("[red]Watch failed:[/red] Iterations must be between 1 and 1000")
+        raise typer.Exit(code=2)
+    try:
+        if fail_on:
+            validate_fail_level(fail_on)
+        previous = load_json_report(Path(baseline).expanduser()) if baseline.strip() else None
+    except (ComparisonError, PolicyError, OSError) as exc:
+        console.print(f"[red]Watch failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    failed = False
+    for iteration in range(1, iterations + 1):
+        try:
+            results = _execute_scan(target, mode, confirm_active, only, skip)
+            if previous:
+                comparison = compare_reports(previous, results)
+                if baseline.strip() and iteration == 1:
+                    comparison["baseline"]["source"] = str(Path(baseline).expanduser())
+                results["comparison"] = comparison["comparison"]
+                results["baseline"] = comparison["baseline"]
+                results["current"] = comparison["current"]
+            suffix = f"watch_{str(results.get('run_id', iteration))[:12]}"
+            path = write_report(results, config.output_dir, target, output, suffix=suffix)
+        except (ScanError, ReportError, ComparisonError, ConfigError, PermissionError, OSError) as exc:
+            console.print(f"[red]Watch failed:[/red] {exc}")
+            raise typer.Exit(code=2) from exc
+
+        summary = results.get("comparison", {}).get("summary", {}) if isinstance(results.get("comparison"), dict) else {}
+        console.print(
+            f"Iteration {iteration}/{iterations}: run={results.get('run_id', '-')} "
+            f"risk={results.get('risk', {}).get('score', 'unknown') if isinstance(results.get('risk'), dict) else 'unknown'} "
+            f"changes=+{summary.get('added', 0)} / -{summary.get('removed', 0)} report={path}"
+        )
+        try:
+            gate_reasons = evaluate_gate(results, fail_on=fail_on, fail_on_change=fail_on_change)
+        except PolicyError as exc:
+            console.print(f"[red]Policy failed:[/red] {exc}")
+            raise typer.Exit(code=2) from exc
+        if gate_reasons:
+            console.print("[red]Quality gate failed:[/red] " + "; ".join(gate_reasons))
+            failed = True
+            break
+        previous = results
+        if iteration < iterations and interval:
+            sleep(interval)
+
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def compare(
     baseline: str = typer.Argument(..., help="Previous JSON report path"),
     current: str = typer.Argument(..., help="Current JSON report path"),
-    output: str = typer.Option("html", "--output", "-o", help="json, csv, html, md/markdown or sarif"),
+    output: str = typer.Option("html", "--output", "-o", help="json, csv, html, pdf, md/markdown or sarif"),
     fail_on: str = typer.Option("", "--fail-on", help="Exit 1 when current risk reaches this severity"),
     fail_on_change: bool = typer.Option(False, "--fail-on-change", help="Exit 1 when any baseline change is detected"),
 ) -> None:
@@ -138,7 +218,7 @@ def compare(
 
     print_banner()
     if output.lower().lstrip(".") not in SUPPORTED_OUTPUTS:
-        console.print("[red]Comparison failed:[/red] Output format must be json, csv, html, md/markdown or sarif")
+        console.print("[red]Comparison failed:[/red] Output format must be json, csv, html, pdf, md/markdown or sarif")
         raise typer.Exit(code=2)
     baseline_path = Path(baseline).expanduser()
     current_path = Path(current).expanduser()
@@ -178,6 +258,41 @@ def compare(
     if gate_reasons:
         console.print("[red]Quality gate failed:[/red] " + "; ".join(gate_reasons))
         raise typer.Exit(code=1)
+
+
+@app.command(name="filter")
+def filter_report(
+    report: str = typer.Argument(..., help="Source JSON scan report"),
+    output: str = typer.Option("html", "--output", "-o", help="json, csv, html, pdf, md/markdown or sarif"),
+    min_severity: str = typer.Option("medium", "--min-severity", help="Include info, low, medium, high or critical findings and above"),
+) -> None:
+    """Create a focused report view without changing the source scan or risk score."""
+
+    print_banner()
+    if output.lower().lstrip(".") not in SUPPORTED_OUTPUTS:
+        console.print("[red]Filter failed:[/red] Output format must be json, csv, html, pdf, md/markdown or sarif")
+        raise typer.Exit(code=2)
+    try:
+        level = validate_min_severity(min_severity)
+        source_path = Path(report).expanduser()
+        source = load_json_report(source_path)
+        filtered = filter_findings(source, level)
+        target = str(filtered.get("target", source_path.stem))
+        path = write_report(filtered, config.output_dir, target, output, suffix=f"filtered_{level}")
+    except (ComparisonError, ReportError, ConfigError, PermissionError, OSError) as exc:
+        console.print(f"[red]Filter failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+    metadata = filtered.get("finding_filter", {}) if isinstance(filtered.get("finding_filter"), dict) else {}
+    table = Table(title="Filtered report")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Source", str(source_path))
+    table.add_row("Threshold", str(metadata.get("minimum_severity", level)))
+    table.add_row("Included", str(metadata.get("included_findings", 0)))
+    table.add_row("Excluded", str(metadata.get("excluded_findings", 0)))
+    table.add_row("Report", str(path))
+    console.print(table)
 
 
 @app.command(name="reports")
@@ -250,6 +365,36 @@ def history(
             str(record["errors"]),
         )
     console.print(table)
+
+
+@app.command()
+def doctor(
+    output: str = typer.Option("table", "--output", "-o", help="table or json"),
+    strict: bool = typer.Option(False, "--strict", help="Treat warnings as failures"),
+) -> None:
+    """Check runtime, configuration and scan readiness without running a scan."""
+
+    output = output.lower().strip()
+    if output not in {"table", "json"}:
+        console.print("[red]Doctor failed:[/red] Output must be table or json")
+        raise typer.Exit(code=2)
+    checks = run_diagnostics(config)
+    summary = diagnostics_summary(checks)
+    if output == "json":
+        console.print(json.dumps({"checks": checks, "summary": summary}, indent=2, ensure_ascii=False))
+    else:
+        table = Table(title="CyberRecon preflight diagnostics")
+        table.add_column("Status")
+        table.add_column("Check", style="cyan")
+        table.add_column("Details", style="green")
+        for item in checks:
+            status = item["status"]
+            color = {"ok": "green", "warn": "yellow", "fail": "red"}.get(status, "white")
+            table.add_row(f"[{color}]{status.upper()}[/{color}]", item["name"], item["details"])
+        table.add_row("", "Summary", f"OK={summary['ok']} WARN={summary['warn']} FAIL={summary['fail']}")
+        console.print(table)
+    if summary["fail"] or (strict and summary["warn"]):
+        raise typer.Exit(code=1)
 
 
 @app.command(name="config-show")

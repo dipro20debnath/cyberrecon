@@ -61,3 +61,12 @@ def test_discover_json_reports_returns_newest_first(tmp_path):
     older.touch()
     newer.touch()
     assert discover_json_reports(tmp_path) == [newer, older]
+
+
+def test_compare_reports_detects_favicon_fingerprint_change():
+    baseline = _report(current=False)
+    current = _report(current=True)
+    baseline["modules"]["web_metadata"] = {"favicon": {"available": True, "format": "ico", "sha256": "old", "mmh3": 1}}
+    current["modules"]["web_metadata"] = {"favicon": {"available": True, "format": "png", "sha256": "new", "mmh3": 2}}
+    result = compare_reports(baseline, current)
+    assert {item["kind"] for item in result["comparison"]["web_paths"]["added"]} == {"favicon:format", "favicon:mmh3", "favicon:sha256"}

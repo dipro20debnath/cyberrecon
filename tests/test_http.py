@@ -9,8 +9,9 @@ class _Response:
     headers = {"Content-Type": "application/json"}
     text = "<html>ok</html>"
 
-    def __init__(self, payload):
+    def __init__(self, payload, content=None):
         self.payload = payload
+        self.content = content if content is not None else self.text.encode()
 
     def raise_for_status(self):
         return None
@@ -63,3 +64,22 @@ def test_json_http_client_caches_json_and_text(tmp_path):
     assert text["status_code"] == 200
     assert isinstance(text["headers"], dict)
     assert session.calls == 2
+
+
+def test_json_http_client_caches_binary_content(tmp_path):
+    cache = JsonFileCache(tmp_path / "cache", ttl=60)
+
+    class BinarySession:
+        def __init__(self):
+            self.headers = {}
+            self.calls = 0
+
+        def get(self, *args, **kwargs):
+            self.calls += 1
+            return _Response({}, content=b"\x00\x01\x02favicon")
+
+    session = BinarySession()
+    client = JsonHttpClient(timeout=1, retries=0, cache=cache, session=session)
+    assert client.get_bytes("https://example.test/favicon.ico", cache_key="favicon-key")["content"] == b"\x00\x01\x02favicon"
+    assert client.get_bytes("https://example.test/favicon.ico", cache_key="favicon-key")["content"] == b"\x00\x01\x02favicon"
+    assert session.calls == 1

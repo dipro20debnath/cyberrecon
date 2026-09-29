@@ -1,10 +1,11 @@
-"""Report writers for JSON, CSV and self-contained HTML output."""
+"""Report writers for JSON, CSV, PDF, Markdown, SARIF and HTML output."""
 
 from __future__ import annotations
 
 import csv
 import json
 import re
+import textwrap
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,56 @@ from cyberrecon.utils.validators import safe_filename
 
 class ReportError(ValueError):
     """Raised when a report format is unsupported or cannot be written."""
+
+
+FINDING_SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def validate_min_severity(value: str) -> str:
+    """Validate a presentation-filter threshold and return its normalized value."""
+
+    level = value.strip().lower()
+    if level not in FINDING_SEVERITY_RANK:
+        raise ReportError("Minimum severity must be info, low, medium, high or critical")
+    return level
+
+
+def filter_findings(results: dict[str, Any], minimum: str) -> dict[str, Any]:
+    """Return a report view containing findings at or above ``minimum``.
+
+    The risk score is deliberately preserved because it was calculated from the
+    complete scan.  The metadata makes that distinction explicit to consumers.
+    """
+
+    level = validate_min_severity(minimum)
+    safe = to_jsonable(results)
+    threshold = FINDING_SEVERITY_RANK[level]
+    if not isinstance(safe.get("risk"), dict):
+        safe["risk"] = {}
+    risk = safe["risk"]
+    indicators = risk.get("indicators", []) if isinstance(risk.get("indicators"), list) else []
+    technology = safe.get("modules", {}).get("technology", {}) if isinstance(safe.get("modules"), dict) else {}
+    security = technology.get("security", {}) if isinstance(technology, dict) else {}
+    header_findings = security.get("findings", []) if isinstance(security, dict) and isinstance(security.get("findings"), list) else []
+
+    def included(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        return FINDING_SEVERITY_RANK.get(str(item.get("severity", "info")).lower(), 0) >= threshold
+
+    filtered_indicators = [item for item in indicators if included(item)]
+    filtered_headers = [item for item in header_findings if included(item)]
+    safe.setdefault("risk", {})["indicators"] = filtered_indicators
+    if isinstance(technology, dict) and isinstance(security, dict):
+        security["findings"] = filtered_headers
+    safe["finding_filter"] = {
+        "minimum_severity": level,
+        "total_findings": len(indicators) + len(header_findings),
+        "included_findings": len(filtered_indicators) + len(filtered_headers),
+        "excluded_findings": len(indicators) + len(header_findings) - len(filtered_indicators) - len(filtered_headers),
+        "note": "Presentation filter only; risk score remains calculated from the complete scan",
+    }
+    return safe
 
 
 def _flatten(value: Any, prefix: str = "") -> list[tuple[str, str, str]]:
@@ -129,6 +180,12 @@ def _render_web_metadata(module: dict[str, Any]) -> str:
     sitemap_rows = [[escape(str(value))] for value in sitemap.get("locations", []) if value]
     security = module.get("security_txt", {}) if isinstance(module.get("security_txt"), dict) else {}
     security_rows = [[escape(str(key).replace("_", " ").title()), escape(str(value))] for key, value in security.items()]
+    favicon = module.get("favicon", {}) if isinstance(module.get("favicon"), dict) else {}
+    favicon_rows = []
+    if favicon.get("available"):
+        for key in ("source", "url", "format", "bytes", "md5", "sha256", "mmh3"):
+            if key in favicon:
+                favicon_rows.append([escape(key.replace("_", " ").title()), escape(str(favicon[key] if favicon[key] is not None else "-"))])
     errors = module.get("errors", [])
     error_html = f'<div class="callout warning">{escape("; ".join(map(str, errors)))}</div>' if errors else ""
     return (
@@ -140,6 +197,8 @@ def _render_web_metadata(module: dict[str, Any]) -> str:
         + _table(["URL"], sitemap_rows, "No sitemap locations found")
         + "<h3>Security.txt fields</h3>"
         + _table(["Field", "Value"], security_rows, "No security.txt fields found")
+        + "<h3>Favicon fingerprint</h3>"
+        + _table(["Field", "Value"], favicon_rows, "No favicon detected")
     )
 
 
@@ -228,6 +287,14 @@ def _write_html(path: Path, results: dict[str, Any]) -> None:
     ])
     sections = [f'<section class="hero"><div><p class="eyebrow">CYBERRECON PRO REPORT</p><h1>{escape(target)}</h1><p class="muted">Generated {escape(str(safe.get("completed_at", safe.get("started_at", ""))))}</p></div><div class="risk-ring {escape(str(severity))}"><strong>{escape(str(score))}</strong><span>/100</span></div></section>', f'<div class="metrics">{cards}</div>']
 
+    finding_filter = safe.get("finding_filter") if isinstance(safe.get("finding_filter"), dict) else None
+    if finding_filter:
+        sections.append(
+            '<div class="callout info">Finding filter: showing '
+            f"{escape(str(finding_filter.get('included_findings', 0)))} of {escape(str(finding_filter.get('total_findings', 0)))} "
+            f"findings at or above {escape(str(finding_filter.get('minimum_severity', 'info')).upper())}. "
+            "The risk score remains based on the complete scan.</div>"
+        )
     if risk.get("indicators"):
         rows = [[_badge(item.get("severity")), escape(str(item.get("name", ""))), escape(str(item.get("message", item.get("ports", item.get("count", "")))))] for item in risk["indicators"]]
         sections.append(_module_section("Important findings", _table(["Severity", "Indicator", "Details"], rows), "findings"))
@@ -270,6 +337,222 @@ h1{{margin:0;font-size:clamp(1.7rem,4vw,2.8rem);word-break:break-word}} h2{{marg
     path.write_text(html, encoding="utf-8")
 
 
+def _pdf_literal(value: Any) -> str:
+    """Return safe PDF literal text using the built-in Helvetica encoding."""
+
+    text = str(value if value is not None else "-").replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    text = text.encode("latin-1", "replace").decode("latin-1")
+    return "(" + text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ")"
+
+
+def _pdf_lines(results: dict[str, Any]) -> list[tuple[str, str]]:
+    """Build concise high-signal lines for the dependency-free PDF renderer."""
+
+    safe = to_jsonable(results)
+    target = safe.get("target", "Unknown target")
+    risk = safe.get("risk", {}) if isinstance(safe.get("risk"), dict) else {}
+    modules = safe.get("modules", {}) if isinstance(safe.get("modules"), dict) else {}
+    errors = safe.get("errors", []) if isinstance(safe.get("errors"), list) else []
+    lines: list[tuple[str, str]] = []
+
+    def heading(value: Any) -> None:
+        lines.append(("heading", str(value)))
+
+    def body(value: Any) -> None:
+        for line in textwrap.wrap(
+            str(value if value is not None else "-"),
+            width=92,
+            break_long_words=True,
+            break_on_hyphens=False,
+        ) or [""]:
+            lines.append(("body", line))
+
+    heading("Executive summary")
+    body(f"Target: {target}")
+    body(f"Mode: {safe.get('mode', 'passive')} | Run ID: {safe.get('run_id', '-')} | Duration: {safe.get('duration_ms', '-')} ms")
+    body(f"Risk: {risk.get('score', 0)}/100 ({str(risk.get('severity', 'unknown')).upper()}) | Errors: {len(errors)}")
+    body(f"Generated: {safe.get('completed_at', safe.get('started_at', '-'))}")
+    finding_filter = safe.get("finding_filter") if isinstance(safe.get("finding_filter"), dict) else None
+    if finding_filter:
+        body(
+            f"Finding filter: {finding_filter.get('included_findings', 0)} of {finding_filter.get('total_findings', 0)} "
+            f"findings at or above {str(finding_filter.get('minimum_severity', 'info')).upper()}. "
+            "Risk score uses the complete scan."
+        )
+
+    indicators = risk.get("indicators", []) if isinstance(risk.get("indicators"), list) else []
+    if indicators:
+        heading("Important findings")
+        for item in indicators:
+            if isinstance(item, dict):
+                detail = item.get("message", item.get("ports", item.get("count", "")))
+                body(f"[{str(item.get('severity', 'unknown')).upper()}] {item.get('name', 'indicator')}: {detail}")
+
+    comparison = safe.get("comparison") if isinstance(safe.get("comparison"), dict) else None
+    if comparison:
+        summary = comparison.get("summary", {}) if isinstance(comparison.get("summary"), dict) else {}
+        heading("Changes since baseline")
+        body(f"Added: {summary.get('added', 0)} | Removed: {summary.get('removed', 0)}")
+        change_labels = {
+            "dns": "DNS",
+            "subdomains": "Subdomains",
+            "technologies": "Technologies",
+            "security_findings": "Security findings",
+            "open_ports": "Open ports",
+            "web_paths": "Web metadata",
+        }
+        for key, label in change_labels.items():
+            value = comparison.get(key, {})
+            if not isinstance(value, dict):
+                continue
+            added = value.get("added", []) if isinstance(value.get("added"), list) else []
+            removed = value.get("removed", []) if isinstance(value.get("removed"), list) else []
+            if added or removed:
+                body(f"{label}: +{len(added)} / -{len(removed)}")
+
+    telemetry = safe.get("telemetry", {}) if isinstance(safe.get("telemetry"), dict) else {}
+    durations = telemetry.get("module_durations_ms", {}) if isinstance(telemetry.get("module_durations_ms"), dict) else {}
+    if durations:
+        heading("Execution telemetry")
+        statuses = telemetry.get("module_status", {}) if isinstance(telemetry.get("module_status"), dict) else {}
+        for name, duration in durations.items():
+            body(f"{name}: {duration} ms ({statuses.get(name, 'unknown')})")
+
+    dns = modules.get("dns") if isinstance(modules.get("dns"), dict) else None
+    if dns:
+        records = dns.get("records", {}) if isinstance(dns.get("records"), dict) else {}
+        heading("DNS intelligence")
+        body("Record counts: " + ", ".join(f"{name}={len(values) if isinstance(values, list) else 0}" for name, values in records.items()) or "No records")
+        posture = dns.get("posture", {}) if isinstance(dns.get("posture"), dict) else {}
+        if posture:
+            dnssec = posture.get("dnssec", {}) if isinstance(posture.get("dnssec"), dict) else {}
+            caa = posture.get("caa", {}) if isinstance(posture.get("caa"), dict) else {}
+            email = posture.get("email_authentication", {}) if isinstance(posture.get("email_authentication"), dict) else {}
+            spf = email.get("spf", {}) if isinstance(email.get("spf"), dict) else {}
+            dmarc = email.get("dmarc", {}) if isinstance(email.get("dmarc"), dict) else {}
+            body(f"DNSSEC: {dnssec.get('status', 'unknown')} | CAA: {', '.join(map(str, caa.get('issuers', []))) or 'not detected'}")
+            body(f"SPF: {'present' if spf.get('present') else 'not detected'} | DMARC: {dmarc.get('policy') or ('present' if dmarc.get('present') else 'not detected')}")
+
+    whois = modules.get("whois") if isinstance(modules.get("whois"), dict) else None
+    if whois and isinstance(whois.get("data"), dict):
+        heading("WHOIS intelligence")
+        for key in ("registrar", "creation_date", "expiration_date", "country", "domain_age_days"):
+            if key in whois["data"]:
+                body(f"{key.replace('_', ' ').title()}: {whois['data'][key]}")
+
+    subdomains = modules.get("subdomains") if isinstance(modules.get("subdomains"), dict) else None
+    if subdomains:
+        values = subdomains.get("subdomains", []) if isinstance(subdomains.get("subdomains"), list) else []
+        heading("Certificate Transparency subdomains")
+        body(f"Discovered: {subdomains.get('count', len(values))}")
+        for value in values[:20]:
+            body(f"- {value}")
+        if len(values) > 20:
+            body(f"... and {len(values) - 20} more")
+
+    technology = modules.get("technology") if isinstance(modules.get("technology"), dict) else None
+    if technology:
+        heading("Technology and HTTP security")
+        technologies = technology.get("technologies", []) if isinstance(technology.get("technologies"), list) else []
+        body(f"Technologies: {', '.join(map(str, technologies)) or 'none detected'}")
+        security = technology.get("security", {}) if isinstance(technology.get("security"), dict) else {}
+        for item in security.get("findings", []) if isinstance(security.get("findings"), list) else []:
+            if isinstance(item, dict):
+                body(f"[{str(item.get('severity', 'unknown')).upper()}] {item.get('header', 'header')}: {item.get('message', '')}")
+
+    tls = modules.get("tls") if isinstance(modules.get("tls"), dict) else None
+    if tls:
+        heading("TLS certificate")
+        certificate = tls.get("certificate", {}) if isinstance(tls.get("certificate"), dict) else {}
+        body(f"Reachable: {tls.get('reachable', False)} | Protocol: {tls.get('tls_version', 'unknown')} | Cipher: {tls.get('cipher', 'unknown')}")
+        for key in ("subject", "issuer", "not_after", "days_until_expiry"):
+            if key in certificate:
+                body(f"{key.replace('_', ' ').title()}: {certificate[key]}")
+
+    active = modules.get("active") if isinstance(modules.get("active"), dict) else None
+    if active:
+        heading("Active reconnaissance")
+        ports = active.get("ports", {}).get("ports", []) if isinstance(active.get("ports"), dict) else []
+        body(f"Open ports: {active.get('ports', {}).get('open_count', 0) if isinstance(active.get('ports'), dict) else 0}")
+        for item in ports:
+            if isinstance(item, dict) and item.get("state") == "open":
+                body(f"{item.get('port')}: {item.get('service', 'unknown')} (open)")
+
+    if errors:
+        heading("Scan errors")
+        for error in errors:
+            body(f"- {error}")
+
+    web_metadata = modules.get("web_metadata") if isinstance(modules.get("web_metadata"), dict) else None
+    favicon = web_metadata.get("favicon", {}) if isinstance(web_metadata, dict) and isinstance(web_metadata.get("favicon"), dict) else {}
+    if favicon.get("available"):
+        heading("Favicon fingerprint")
+        body(f"Format: {favicon.get('format', 'unknown')} | Bytes: {favicon.get('bytes', 0)} | Source: {favicon.get('source', '-')}")
+        body(f"SHA-256: {favicon.get('sha256', '-')} | MD5: {favicon.get('md5', '-')} | MMH3: {favicon.get('mmh3', '-')}")
+    return lines
+
+
+def _write_pdf(path: Path, results: dict[str, Any]) -> None:
+    """Write a readable multi-page PDF without external runtime dependencies."""
+
+    lines = _pdf_lines(results)
+    page_capacity = 47
+    pages = [lines[index:index + page_capacity] for index in range(0, len(lines), page_capacity)] or [[("body", "No report data")]]
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    ]
+    page_start = 5
+    content_start = page_start + len(pages)
+    page_refs = " ".join(f"{page_start + index} 0 R" for index in range(len(pages)))
+    objects[1] = f"<< /Type /Pages /Kids [{page_refs}] /Count {len(pages)} >>".encode("ascii")
+
+    page_objects: list[bytes] = []
+    content_objects: list[bytes] = []
+    target = str(to_jsonable(results).get("target", "Unknown target"))
+    for index, page_lines in enumerate(pages):
+        stream_lines = [
+            "q 0.09 0.14 0.33 rg 0 748 612 44 re f Q",
+            f"BT /F2 16 Tf 1 1 1 rg 1 0 0 1 46 764 Tm {_pdf_literal('CYBERRECON PRO')} Tj ET",
+            f"BT /F1 8 Tf 0.82 0.87 0.95 rg 1 0 0 1 46 752 Tm {_pdf_literal(target)} Tj ET",
+        ]
+        y = 725
+        for kind, line in page_lines:
+            if kind == "heading":
+                stream_lines.append(f"BT /F2 12 Tf 0.09 0.14 0.33 rg 1 0 0 1 46 {y} Tm {_pdf_literal(line)} Tj ET")
+                y -= 19
+            else:
+                stream_lines.append(f"BT /F1 9 Tf 0.12 0.16 0.22 rg 1 0 0 1 52 {y} Tm {_pdf_literal(line)} Tj ET")
+                y -= 13
+        stream_lines.extend([
+            "0.85 0.88 0.93 RG 46 43 520 0.5 re S",
+            f"BT /F1 8 Tf 0.39 0.45 0.55 rg 1 0 0 1 46 28 Tm {_pdf_literal(f'CyberRecon Pro | Page {index + 1} of {len(pages)}')} Tj ET",
+        ])
+        stream = ("\n".join(stream_lines) + "\n").encode("latin-1", "replace")
+        content_objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"endstream")
+        page_objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {content_start + index} 0 R >>".encode("ascii")
+        )
+    objects.extend(page_objects)
+    objects.extend(content_objects)
+
+    document = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for number, obj in enumerate(objects, 1):
+        offsets.append(len(document))
+        document.extend(f"{number} 0 obj\n".encode("ascii"))
+        document.extend(obj)
+        document.extend(b"\nendobj\n")
+    xref_offset = len(document)
+    document.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets[1:]:
+        document.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    document.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii"))
+    path.write_bytes(document)
+
+
 def _markdown_value(value: Any) -> str:
     return str(value if value is not None else "-").replace("|", "\\|").replace("\r", "").replace("\n", " ")
 
@@ -297,6 +580,9 @@ def _write_markdown(path: Path, results: dict[str, Any]) -> None:
         "",
     ]
     lines += _markdown_table(["Metric", "Value"], [["Score", f"{risk.get('score', 0)}/100"], ["Severity", risk.get("severity", "unknown")], ["Errors", len(safe.get("errors", []))]])
+    finding_filter = safe.get("finding_filter") if isinstance(safe.get("finding_filter"), dict) else None
+    if finding_filter:
+        lines += ["", f"> Finding filter: showing **{finding_filter.get('included_findings', 0)}** of **{finding_filter.get('total_findings', 0)}** findings at or above **{finding_filter.get('minimum_severity', 'info').upper()}**. The risk score remains based on the complete scan."]
     indicators = risk.get("indicators", []) if isinstance(risk.get("indicators"), list) else []
     if indicators:
         lines += ["", "## Important findings", ""]
@@ -321,6 +607,15 @@ def _write_markdown(path: Path, results: dict[str, Any]) -> None:
             caa = posture.get("caa", {}) if isinstance(posture.get("caa"), dict) else {}
             lines += ["", "### DNS security posture", ""]
             lines += _markdown_table(["Control", "Status"], [["DNSSEC", dnssec.get("status", "unknown")], ["CAA", ", ".join(caa.get("issuers", [])) or "Not detected"], ["SPF", "Present" if spf.get("present") else "Not detected"], ["DMARC", dmarc.get("policy") or ("Present" if dmarc.get("present") else "Not detected")]])
+
+    web_metadata = modules.get("web_metadata") if isinstance(modules.get("web_metadata"), dict) else None
+    favicon = web_metadata.get("favicon", {}) if isinstance(web_metadata, dict) and isinstance(web_metadata.get("favicon"), dict) else {}
+    if favicon.get("available"):
+        lines += ["", "## Favicon fingerprint", ""]
+        lines += _markdown_table(
+            ["Field", "Value"],
+            [[key.replace("_", " ").title(), favicon.get(key, "-")] for key in ("source", "url", "format", "bytes", "md5", "sha256", "mmh3")],
+        )
 
     comparison = safe.get("comparison") if isinstance(safe.get("comparison"), dict) else None
     if comparison:
@@ -397,8 +692,8 @@ def write_report(results: dict[str, Any], output_dir: Path, target: str, fmt: st
 
     fmt = fmt.lower().lstrip(".")
     fmt = {"markdown": "md"}.get(fmt, fmt)
-    if fmt not in {"json", "csv", "html", "md", "sarif"}:
-        raise ReportError("Output format must be json, csv, html, md/markdown or sarif")
+    if fmt not in {"json", "csv", "html", "pdf", "md", "sarif"}:
+        raise ReportError("Output format must be json, csv, html, pdf, md/markdown or sarif")
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{safe_filename(target)}_{safe_filename(suffix)}.{fmt}"
     safe_results = to_jsonable(results)
@@ -412,6 +707,8 @@ def write_report(results: dict[str, Any], output_dir: Path, target: str, fmt: st
             writer.writerows(_flatten(safe_results))
     elif fmt == "html":
         _write_html(path, safe_results)
+    elif fmt == "pdf":
+        _write_pdf(path, safe_results)
     elif fmt == "md":
         _write_markdown(path, safe_results)
     else:

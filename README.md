@@ -11,7 +11,7 @@ python -m cyberrecon init
 python -m cyberrecon scan example.com --output json
 ```
 
-Use `--output csv` or `--output html` for the other report formats. API keys can
+Use `--output csv`, `--output html` or `--output pdf` for the other report formats. API keys can
 be set with environment variables such as `CR_VIRUSTOTAL_API_KEY` or with
 `python -m cyberrecon config-set api_keys.virustotal YOUR_KEY`.
 
@@ -20,10 +20,21 @@ For documentation or CI ingestion, use Markdown or SARIF output:
 ```powershell
 python -m cyberrecon scan example.com --output md
 python -m cyberrecon scan example.com --output sarif
+python -m cyberrecon scan example.com --output pdf
 ```
 
 SARIF 2.1.0 contains risk indicators, HTTP security findings and scan errors
 with the target attached as a location.
+
+Create a focused operator report from an existing JSON scan without changing
+the source report or its full-scan risk score:
+
+```powershell
+python -m cyberrecon filter reports/example.com_scan.json --min-severity high --output html
+python -m cyberrecon filter reports/example.com_scan.json --min-severity critical --output pdf
+```
+
+The filtered report records the threshold and included/excluded counts.
 
 CI quality gates can fail the command after writing its report:
 
@@ -57,6 +68,26 @@ python -m cyberrecon history --target example.com --limit 20
 
 The history table shows risk score/severity, runtime, baseline changes and
 module errors without opening each report manually.
+
+Run a non-invasive preflight check before deployment or scanning:
+
+```powershell
+python -m cyberrecon doctor
+python -m cyberrecon doctor --output json --strict
+```
+
+The doctor checks runtime dependencies, configuration, output/cache paths,
+optional API-key availability, active allowlisting and report inventory.
+
+For continuous passive monitoring, use `watch`; each run gets a unique report
+name and is compared with the previous iteration:
+
+```powershell
+python -m cyberrecon watch example.com --iterations 3 --interval 300 --output html
+```
+
+Use `--fail-on-change` or `--fail-on high` to stop the watch with a non-zero
+exit code when the monitoring policy is violated.
 
 Run a focused scan when only a few intelligence sources need refreshing:
 
@@ -114,13 +145,13 @@ grabbing. Only use it with written authorization.
 ## Architecture
 
 - `config.py`: validated, deep-merged YAML configuration with atomic writes
-- `modules/passive`: DNS, WHOIS, CT logs, IP intelligence, HTTP fingerprinting and public web metadata
+- `modules/passive`: DNS, WHOIS, CT logs, IP intelligence, HTTP fingerprinting, favicon fingerprinting and public web metadata
 - DNS reports include DNSSEC evidence, CAA issuers and mail-domain SPF/DMARC posture analysis
 - `modules/passive`: TLS certificate inspection and HTTP security-header posture analysis
 - `integrations.py`: optional read-only VirusTotal, URLScan, SecurityTrails, Shodan and Censys lookups
 - `utils/http.py`: shared retry, rate-limit and TTL-cache policy for HTTP intelligence modules
 - `modules/active.py`: guarded wordlist DNS resolution and bounded TCP probes
 - `diffing.py`: validated baseline loading and report change detection
-- `reporting.py`: JSON, CSV, Markdown, SARIF and self-contained HTML reports with highlighted findings
+- `reporting.py`: JSON, CSV, PDF, Markdown, SARIF and self-contained HTML reports with highlighted findings
 - `risk.py`: conservative heuristic indicators, not a vulnerability score
 - `tests/`: offline unit tests with network calls mocked or avoided
