@@ -6,6 +6,8 @@ result instead of an exception, so the core scanner remains useful offline.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any, Optional
 
 from cyberrecon.config import Config
@@ -25,9 +27,10 @@ class ExternalIntelligence:
             cache=cache,
         )
         self.config = config
+        self._active_keys: dict[str, str] = {}
 
     def collect(self, target: str) -> dict[str, Any]:
-        result: dict[str, Any] = {"target": target, "sources": {}, "skipped": []}
+        result: dict[str, Any] = {"target": target, "sources": {}, "skipped": [], "credential_rotation": {}}
         try:
             info = normalize_target(target)
         except TargetValidationError as exc:
@@ -42,7 +45,8 @@ class ExternalIntelligence:
             ("censys", self._censys),
         )
         for name, function in integrations:
-            if not self.config.get_api_key(name):
+            keys = self.config.get_api_keys(name)
+            if not keys:
                 result["skipped"].append(f"{name}: API key not configured")
                 continue
             try:
@@ -52,13 +56,58 @@ class ExternalIntelligence:
                 if name in {"shodan", "censys"} and info.is_domain:
                     result["skipped"].append(f"{name}: IP target required")
                     continue
-                result["sources"][name] = function(info.value)
+                order = self._key_order(name, info.value, len(keys))
+                attempts = 0
+                last_error: Optional[Exception] = None
+                for position, key_index in enumerate(order):
+                    self._active_keys[name] = keys[key_index]
+                    attempts += 1
+                    try:
+                        result["sources"][name] = function(info.value)
+                        last_error = None
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        if position == len(order) - 1 or not self._should_rotate(exc):
+                            break
+                if last_error is not None:
+                    result["sources"][name] = {"error": str(last_error), "attempts": attempts}
+                result["credential_rotation"][name] = {
+                    "key_count": len(keys),
+                    "initial_key_slot": order[0] + 1,
+                    "attempts": attempts,
+                    "fallback_used": attempts > 1,
+                }
             except Exception as exc:
                 result["sources"][name] = {"error": str(exc)}
+            finally:
+                self._active_keys.pop(name, None)
         return result
 
+    @staticmethod
+    def _key_order(service: str, target: str, count: int) -> list[int]:
+        """Distribute targets deterministically, then provide ordered fallbacks."""
+
+        if count < 1:
+            return []
+        digest = hashlib.sha256(f"{service}:{target}".encode("utf-8")).digest()
+        start = int.from_bytes(digest[:8], "big") % count
+        return [(start + offset) % count for offset in range(count)]
+
+    @staticmethod
+    def _should_rotate(error: Exception) -> bool:
+        message = str(error).lower()
+        return bool(re.search(r"\b(401|403|429)\b", message)) or "rate limit" in message or "too many requests" in message
+
+    def _current_key(self, service: str) -> Optional[str]:
+        active = self._active_keys.get(service)
+        if active:
+            return active
+        keys = self.config.get_api_keys(service)
+        return keys[0] if keys else None
+
     def _virustotal(self, target: str) -> Any:
-        key = self.config.get_api_key("virustotal")
+        key = self._current_key("virustotal")
         kind = "domains" if not _looks_like_ip(target) else "ip_addresses"
         payload = self.client.get_json(
             f"https://www.virustotal.com/api/v3/{kind}/{target}",
@@ -68,7 +117,7 @@ class ExternalIntelligence:
         return _extract_data(payload)
 
     def _urlscan(self, target: str) -> Any:
-        key = self.config.get_api_key("urlscan")
+        key = self._current_key("urlscan")
         payload = self.client.get_json(
             "https://urlscan.io/api/v1/search/",
             headers={"api-key": str(key), "accept": "application/json"},
@@ -78,7 +127,7 @@ class ExternalIntelligence:
         return payload
 
     def _securitytrails(self, target: str) -> Any:
-        key = self.config.get_api_key("securitytrails")
+        key = self._current_key("securitytrails")
         return self.client.get_json(
             f"https://api.securitytrails.com/v1/domain/{target}/subdomains",
             headers={"APIKEY": str(key), "accept": "application/json"},
@@ -86,7 +135,7 @@ class ExternalIntelligence:
         )
 
     def _shodan(self, target: str) -> Any:
-        key = self.config.get_api_key("shodan")
+        key = self._current_key("shodan")
         return self.client.get_json(
             f"https://api.shodan.io/shodan/host/{target}",
             params={"key": str(key), "minify": "true"},
@@ -94,7 +143,7 @@ class ExternalIntelligence:
         )
 
     def _censys(self, target: str) -> Any:
-        key = self.config.get_api_key("censys")
+        key = self._current_key("censys")
         return self.client.get_json(
             f"https://api.platform.censys.io/v3/global/asset/host/{target}",
             headers={"Authorization": f"Bearer {key}", "accept": "application/json"},

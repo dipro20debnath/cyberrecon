@@ -15,6 +15,20 @@ Use `--output csv`, `--output html` or `--output pdf` for the other report forma
 be set with environment variables such as `CR_VIRUSTOTAL_API_KEY` or with
 `python -m cyberrecon config-set api_keys.virustotal YOUR_KEY`.
 
+Providers may use a YAML key list for rotation, or a comma-separated
+`CR_<PROVIDER>_API_KEYS` environment variable:
+
+```yaml
+api_keys:
+  virustotal:
+    - first-key
+    - second-key
+```
+
+Targets are assigned deterministically to a key slot. If a provider returns
+401, 403 or 429/rate-limit errors, the next configured key is attempted. Only
+non-secret rotation metadata is stored in reports.
+
 For documentation or CI ingestion, use Markdown or SARIF output:
 
 ```powershell
@@ -74,10 +88,13 @@ Run a non-invasive preflight check before deployment or scanning:
 ```powershell
 python -m cyberrecon doctor
 python -m cyberrecon doctor --output json --strict
+python -m cyberrecon doctor --live-apis --api-target example.com
 ```
 
 The doctor checks runtime dependencies, configuration, output/cache paths,
 optional API-key availability, active allowlisting and report inventory.
+`--live-apis` is opt-in and performs bounded read-only provider requests; it
+reports only status/attempt metadata and never prints keys or response bodies.
 
 For continuous passive monitoring, use `watch`; each run gets a unique report
 name and is compared with the previous iteration:

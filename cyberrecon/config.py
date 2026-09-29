@@ -164,11 +164,32 @@ class Config:
         return value if parsed is None else parsed
 
     def get_api_key(self, service: str) -> Optional[str]:
-        """Read an API key, preferring the corresponding environment variable."""
+        """Read the first configured API key for backward compatibility."""
 
-        env_key = os.getenv(f"CR_{service.upper()}_API_KEY")
-        configured = self.get(f"api_keys.{service}", "")
-        return env_key or configured or None
+        keys = self.get_api_keys(service)
+        return keys[0] if keys else None
+
+    def get_api_keys(self, service: str) -> list[str]:
+        """Return configured provider keys in order, without exposing them."""
+
+        prefix = service.upper()
+        raw: Any = os.getenv(f"CR_{prefix}_API_KEYS")
+        if raw is None:
+            raw = os.getenv(f"CR_{prefix}_API_KEY")
+        if raw is None:
+            raw = self.get(f"api_keys.{service}", "")
+        if isinstance(raw, str):
+            values = raw.split(",") if "," in raw else [raw]
+        elif isinstance(raw, (list, tuple, set)):
+            values = list(raw)
+        else:
+            values = []
+        result: list[str] = []
+        for value in values:
+            normalized = str(value).strip()
+            if normalized and normalized not in result:
+                result.append(normalized)
+        return result
 
     def redacted(self) -> Dict[str, Any]:
         """Return a copy safe for terminal output and logs."""

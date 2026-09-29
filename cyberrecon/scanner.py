@@ -61,7 +61,7 @@ class ReconScanner:
 
         results: dict[str, Any] = {
             "tool": "CyberRecon Pro",
-            "version": "1.14.0",
+            "version": "1.16.0",
             "target": info.value,
             "target_type": info.kind,
             "mode": mode,
@@ -89,7 +89,7 @@ class ReconScanner:
                 cache=http_cache,
             ).find_subdomains(info.value),
             "ip_intelligence": lambda: IPIntelligence(
-                self.config.get_api_key("ipinfo"),
+                self.config.get_api_keys("ipinfo"),
                 self.config.timeout,
                 retries=self.config.max_retries,
                 rate_limit=self.config.rate_limit,

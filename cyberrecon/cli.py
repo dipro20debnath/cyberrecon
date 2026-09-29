@@ -371,14 +371,16 @@ def history(
 def doctor(
     output: str = typer.Option("table", "--output", "-o", help="table or json"),
     strict: bool = typer.Option(False, "--strict", help="Treat warnings as failures"),
+    live_apis: bool = typer.Option(False, "--live-apis", help="Make bounded read-only requests to configured API providers"),
+    api_target: str = typer.Option("example.com", "--api-target", help="Domain or IP to use with --live-apis"),
 ) -> None:
-    """Check runtime, configuration and scan readiness without running a scan."""
+    """Check runtime, configuration and optional live API readiness."""
 
     output = output.lower().strip()
     if output not in {"table", "json"}:
         console.print("[red]Doctor failed:[/red] Output must be table or json")
         raise typer.Exit(code=2)
-    checks = run_diagnostics(config)
+    checks = run_diagnostics(config, live_apis=live_apis, api_target=api_target)
     summary = diagnostics_summary(checks)
     if output == "json":
         console.print(json.dumps({"checks": checks, "summary": summary}, indent=2, ensure_ascii=False))
