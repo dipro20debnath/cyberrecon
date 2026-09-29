@@ -51,7 +51,7 @@ class ReconScanner:
 
         results: dict[str, Any] = {
             "tool": "CyberRecon Pro",
-            "version": "1.2.0",
+            "version": "1.3.0",
             "target": info.value,
             "target_type": info.kind,
             "mode": mode,

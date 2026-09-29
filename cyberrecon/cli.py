@@ -13,8 +13,10 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn
 from rich.table import Table
 
 from cyberrecon.config import Config, ConfigError, config
+from cyberrecon.diffing import ComparisonError, compare_reports, discover_json_reports, load_json_report
 from cyberrecon.reporting import ReportError, write_report
 from cyberrecon.scanner import ReconScanner, ScanError
+from cyberrecon.utils.validators import safe_filename
 
 
 app = typer.Typer(
@@ -51,6 +53,7 @@ def scan(
     mode: str = typer.Option("passive", "--mode", "-m", help="passive, active or full"),
     output: str = typer.Option("json", "--output", "-o", help="json, csv or html"),
     confirm_active: bool = typer.Option(False, "--confirm-active", help="Confirm you are authorized for active checks"),
+    baseline: str = typer.Option("", "--baseline", help="Previous JSON report to compare against"),
 ) -> None:
     """Run a reconnaissance scan and save a report."""
 
@@ -78,8 +81,18 @@ def scan(
                 confirm_active=confirm_active,
                 progress_callback=update_progress,
             )
-        path = write_report(results, config.output_dir, target, output)
-    except (ScanError, ReportError, ConfigError, PermissionError, OSError) as exc:
+        suffix = "scan"
+        if baseline.strip():
+            baseline_path = Path(baseline).expanduser()
+            previous = load_json_report(baseline_path)
+            comparison = compare_reports(previous, results)
+            comparison["baseline"]["source"] = str(baseline_path)
+            results["comparison"] = comparison["comparison"]
+            results["baseline"] = comparison["baseline"]
+            results["current"] = comparison["current"]
+            suffix = "scan_with_baseline"
+        path = write_report(results, config.output_dir, target, output, suffix=suffix)
+    except (ScanError, ReportError, ComparisonError, ConfigError, PermissionError, OSError) as exc:
         console.print(f"[red]Scan failed:[/red] {exc}")
         raise typer.Exit(code=2) from exc
 
@@ -90,7 +103,86 @@ def scan(
     table.add_row("Mode", str(results.get("mode")))
     table.add_row("Modules", str(len(results.get("modules", {}))))
     table.add_row("Errors", str(len(results.get("errors", []))))
+    if isinstance(results.get("comparison"), dict):
+        summary = results["comparison"].get("summary", {})
+        table.add_row("Baseline changes", f"+{summary.get('added', 0)} / -{summary.get('removed', 0)}")
     table.add_row("Report", str(path))
+    console.print(table)
+
+
+@app.command()
+def compare(
+    baseline: str = typer.Argument(..., help="Previous JSON report path"),
+    current: str = typer.Argument(..., help="Current JSON report path"),
+    output: str = typer.Option("html", "--output", "-o", help="json, csv or html"),
+) -> None:
+    """Compare two JSON reports for the same target."""
+
+    print_banner()
+    if output.lower().lstrip(".") not in {"json", "csv", "html"}:
+        console.print("[red]Comparison failed:[/red] Output format must be json, csv or html")
+        raise typer.Exit(code=2)
+    baseline_path = Path(baseline).expanduser()
+    current_path = Path(current).expanduser()
+    try:
+        comparison = compare_reports(load_json_report(baseline_path), load_json_report(current_path))
+        comparison["baseline"]["source"] = str(baseline_path)
+        comparison["current"]["source"] = str(current_path)
+        target_label = f"{safe_filename(current_path.stem)}_vs_{safe_filename(baseline_path.stem)}"
+        path = write_report(comparison, config.output_dir, target_label, output, suffix="comparison")
+    except (ComparisonError, ReportError, ConfigError, PermissionError, OSError) as exc:
+        console.print(f"[red]Comparison failed:[/red] {exc}")
+        if "not found" in str(exc).lower():
+            available = discover_json_reports(config.output_dir)
+            if available:
+                console.print(f"[yellow]Available JSON reports in {config.output_dir}:[/yellow]")
+                for report_path in available[:10]:
+                    console.print(f"  {report_path}")
+                console.print("[yellow]Use `python -m cyberrecon reports` to list report details.[/yellow]")
+        raise typer.Exit(code=2) from exc
+
+    changes = comparison["comparison"]
+    summary = changes["summary"]
+    table = Table(title="Baseline comparison")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Target", str(comparison.get("target")))
+    table.add_row("Added", str(summary.get("added", 0)))
+    table.add_row("Removed", str(summary.get("removed", 0)))
+    table.add_row("Risk delta", str(changes.get("risk", {}).get("delta", "unknown")))
+    table.add_row("Report", str(path))
+    console.print(table)
+
+
+@app.command(name="reports")
+def reports() -> None:
+    """List JSON reports available for baseline comparison."""
+
+    paths = discover_json_reports(config.output_dir)
+    if not paths:
+        console.print(f"[yellow]No JSON reports found in {config.output_dir}[/yellow]")
+        console.print("Run `python -m cyberrecon scan <target> --output json` first.")
+        return
+
+    table = Table(title=f"Available reports: {config.output_dir}")
+    table.add_column("File", style="cyan")
+    table.add_column("Target", style="green")
+    table.add_column("Mode")
+    table.add_column("Completed")
+    table.add_column("Size")
+    for path in paths:
+        try:
+            payload = load_json_report(path)
+            size = f"{path.stat().st_size / 1024:.1f} KB"
+            table.add_row(
+                path.name,
+                str(payload.get("target", "unknown")),
+                str(payload.get("mode", "unknown")),
+                str(payload.get("completed_at", "-")),
+                size,
+            )
+        except (ComparisonError, OSError):
+            table.add_row(path.name, "invalid report", "-", "-", "-")
     console.print(table)
 
 

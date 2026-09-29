@@ -15,6 +15,26 @@ Use `--output csv` or `--output html` for the other report formats. API keys can
 be set with environment variables such as `CR_VIRUSTOTAL_API_KEY` or with
 `python -m cyberrecon config-set api_keys.virustotal YOUR_KEY`.
 
+## Baseline comparison
+
+Keep a previous JSON report and compare future scans against it. The comparison
+tracks DNS, subdomains, technologies, security findings, open ports, TLS expiry
+and risk-score changes:
+
+```powershell
+python -m cyberrecon scan example.com --output json
+python -m cyberrecon scan example.com --output html --baseline reports/example.com_scan.json
+python -m cyberrecon compare reports/older.json reports/newer.json --output html
+python -m cyberrecon reports
+```
+
+Baseline scans are written as `*_scan_with_baseline.*` so the previous report is
+not overwritten. Comparison reports are self-contained HTML dashboards or
+machine-readable JSON/CSV files.
+
+Use `reports` to see the exact JSON filenames before running `compare`; this is
+especially useful when several scans of the same target are stored together.
+
 ## Active checks
 
 Active mode is disabled by default. To enable it, edit `config.yaml`:
@@ -43,6 +63,7 @@ grabbing. Only use it with written authorization.
 - `modules/passive`: TLS certificate inspection and HTTP security-header posture analysis
 - `integrations.py`: optional read-only VirusTotal, URLScan, SecurityTrails, Shodan and Censys lookups
 - `modules/active.py`: guarded wordlist DNS resolution and bounded TCP probes
-- `reporting.py`: JSON, CSV and self-contained HTML reports
+- `diffing.py`: validated baseline loading and report change detection
+- `reporting.py`: JSON, CSV and self-contained HTML reports with highlighted findings
 - `risk.py`: conservative heuristic indicators, not a vulnerability score
 - `tests/`: offline unit tests with network calls mocked or avoided
