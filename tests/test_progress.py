@@ -1,5 +1,7 @@
+import pytest
+
 from cyberrecon.config import Config
-from cyberrecon.scanner import ReconScanner
+from cyberrecon.scanner import ReconScanner, ScanError
 
 
 class _DNS:
@@ -54,3 +56,25 @@ def test_scanner_reports_monotonic_live_progress(tmp_path, monkeypatch):
     assert events[-1][0] == events[-1][1]
     assert all(event[1] == events[-1][1] for event in events)
     assert all(current[0] >= previous[0] for previous, current in zip(events, events[1:]))
+
+
+def test_scanner_supports_focused_module_selection(tmp_path, monkeypatch):
+    import cyberrecon.scanner as scanner_module
+
+    monkeypatch.setattr(scanner_module, "DNSEnumerator", _DNS)
+    monkeypatch.setattr(scanner_module, "TLSInspector", _TLS)
+    events = []
+    results = ReconScanner(Config(tmp_path / "config.yaml")).scan(
+        "example.com",
+        only="dns,tls",
+        skip="tls",
+        progress_callback=lambda *event: events.append(event),
+    )
+    assert set(results["modules"]) == {"dns"}
+    assert results["scan_plan"]["stages"] == ["dns", "risk"]
+    assert events[-1][0] == events[-1][1] == 2
+
+
+def test_scanner_rejects_active_module_in_passive_mode(tmp_path):
+    with pytest.raises(ScanError, match="unavailable"):
+        ReconScanner(Config(tmp_path / "config.yaml")).scan("example.com", only="active.ports")

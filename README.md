@@ -15,6 +15,18 @@ Use `--output csv` or `--output html` for the other report formats. API keys can
 be set with environment variables such as `CR_VIRUSTOTAL_API_KEY` or with
 `python -m cyberrecon config-set api_keys.virustotal YOUR_KEY`.
 
+Run a focused scan when only a few intelligence sources need refreshing:
+
+```powershell
+python -m cyberrecon scan example.com --only dns,tls,technology --output html
+python -m cyberrecon scan example.com --skip external_intelligence --output json
+```
+
+Available passive modules are `dns`, `whois`, `subdomains`,
+`ip_intelligence`, `technology`, `tls` and `external_intelligence`. Active
+modules use names such as `active.ports` and still require active authorization.
+The risk assessment always runs as the final stage.
+
 ## Baseline comparison
 
 Keep a previous JSON report and compare future scans against it. The comparison

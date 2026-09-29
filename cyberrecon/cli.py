@@ -54,6 +54,8 @@ def scan(
     output: str = typer.Option("json", "--output", "-o", help="json, csv or html"),
     confirm_active: bool = typer.Option(False, "--confirm-active", help="Confirm you are authorized for active checks"),
     baseline: str = typer.Option("", "--baseline", help="Previous JSON report to compare against"),
+    only: str = typer.Option("", "--only", help="Comma-separated modules to run, for example dns,tls"),
+    skip: str = typer.Option("", "--skip", help="Comma-separated modules to skip"),
 ) -> None:
     """Run a reconnaissance scan and save a report."""
 
@@ -80,6 +82,8 @@ def scan(
                 mode=mode,
                 confirm_active=confirm_active,
                 progress_callback=update_progress,
+                only=only or None,
+                skip=skip or None,
             )
         suffix = "scan"
         if baseline.strip():
