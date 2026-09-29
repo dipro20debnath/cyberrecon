@@ -184,8 +184,10 @@ def _tls_expiry(report: dict[str, Any]) -> float | int | None:
 def _metadata(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "target": str(report.get("target", "")),
+        "run_id": report.get("run_id"),
         "started_at": report.get("started_at"),
         "completed_at": report.get("completed_at"),
+        "duration_ms": report.get("duration_ms"),
         "risk": _risk(report),
     }
 

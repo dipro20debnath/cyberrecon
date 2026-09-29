@@ -14,6 +14,7 @@ from rich.table import Table
 
 from cyberrecon.config import Config, ConfigError, config
 from cyberrecon.diffing import ComparisonError, compare_reports, discover_json_reports, load_json_report
+from cyberrecon.history import HistoryError, collect_history
 from cyberrecon.policy import PolicyError, evaluate_gate
 from cyberrecon.reporting import ReportError, write_report
 from cyberrecon.scanner import ReconScanner, ScanError
@@ -208,6 +209,46 @@ def reports() -> None:
             )
         except (ComparisonError, OSError):
             table.add_row(path.name, "invalid report", "-", "-", "-")
+    console.print(table)
+
+
+@app.command()
+def history(
+    target: str = typer.Option("", "--target", "-t", help="Filter history to one domain or IP"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum reports to show (1-500)"),
+) -> None:
+    """Show risk and runtime trends from stored JSON reports."""
+
+    try:
+        records = collect_history(config.output_dir, target=target, limit=limit)
+    except HistoryError as exc:
+        console.print(f"[red]History failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    if not records:
+        scope = f" for {target}" if target else ""
+        console.print(f"[yellow]No valid JSON scan history found{scope} in {config.output_dir}[/yellow]")
+        return
+
+    table = Table(title=f"Scan history: {config.output_dir}")
+    table.add_column("File", style="cyan")
+    table.add_column("Target", style="green")
+    table.add_column("Completed")
+    table.add_column("Risk")
+    table.add_column("Duration")
+    table.add_column("Changes")
+    table.add_column("Errors")
+    for record in records:
+        duration = record["duration_ms"]
+        duration_text = "-" if duration in (None, "unknown", "") else f"{duration} ms"
+        table.add_row(
+            record["path"].name,
+            str(record["target"]),
+            str(record["completed_at"]),
+            f"{record['risk_score']} ({record['risk_severity']})",
+            duration_text,
+            str(record["changes"]),
+            str(record["errors"]),
+        )
     console.print(table)
 
 

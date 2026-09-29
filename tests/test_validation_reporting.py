@@ -26,6 +26,9 @@ def test_html_report_highlights_important_information(tmp_path):
     data = {
         "target": "example.com",
         "mode": "passive",
+        "run_id": "run-123",
+        "duration_ms": 12.5,
+        "telemetry": {"module_durations_ms": {"tls": 4.2}, "module_status": {"tls": "ok"}},
         "risk": {"score": 35, "severity": "medium", "indicators": [{"severity": "medium", "name": "certificate_expiry", "days_until_expiry": 5}]},
         "modules": {
             "tls": {"reachable": True, "tls_version": "TLSv1.3", "certificate": {"days_until_expiry": 5}},
@@ -38,6 +41,7 @@ def test_html_report_highlights_important_information(tmp_path):
     assert "Important findings" in html
     assert "TLS certificate" in html
     assert "certificate_expiry" in html
+    assert "Execution telemetry" in html
 
 
 def test_sarif_report_contains_risk_results(tmp_path):

@@ -220,6 +220,8 @@ def _write_html(path: Path, results: dict[str, Any]) -> None:
     cards = "".join([
         _metric("Target", target),
         _metric("Mode", safe.get("mode", "passive")),
+        _metric("Run ID", safe.get("run_id", "-")),
+        _metric("Duration", f'{safe.get("duration_ms", "-")} ms'),
         _metric("Risk score", f"{score}/100", str(severity)),
         _metric("Risk level", str(severity).upper(), str(severity)),
         _metric("Errors", len(errors), "high" if errors else "low"),
@@ -233,6 +235,12 @@ def _write_html(path: Path, results: dict[str, Any]) -> None:
         sections.append(_module_section("Changes since baseline", _render_comparison(safe["comparison"]), "comparison"))
     if errors:
         sections.append(_module_section("Scan errors", '<div class="callout danger">' + "<br>".join(escape(str(item)) for item in errors) + "</div>", "errors"))
+    telemetry = safe.get("telemetry", {}) if isinstance(safe.get("telemetry"), dict) else {}
+    durations = telemetry.get("module_durations_ms", {}) if isinstance(telemetry.get("module_durations_ms"), dict) else {}
+    statuses = telemetry.get("module_status", {}) if isinstance(telemetry.get("module_status"), dict) else {}
+    if durations:
+        telemetry_rows = [[escape(str(name)), escape(str(duration)), _badge("info" if statuses.get(name) == "ok" else "high")] for name, duration in durations.items()]
+        sections.append(_module_section("Execution telemetry", _table(["Stage", "Duration (ms)", "Status"], telemetry_rows), "telemetry"))
     if "dns" in modules:
         sections.append(_module_section("DNS records", _render_dns(modules["dns"]), "dns"))
     if "whois" in modules:
@@ -281,6 +289,8 @@ def _write_markdown(path: Path, results: dict[str, Any]) -> None:
         "",
         f"**Target:** `{_markdown_value(target)}`  ",
         f"**Mode:** `{_markdown_value(safe.get('mode', 'passive'))}`  ",
+        f"**Run ID:** `{_markdown_value(safe.get('run_id', '-'))}`  ",
+        f"**Duration:** `{_markdown_value(safe.get('duration_ms', '-'))} ms`  ",
         f"**Generated:** `{_markdown_value(safe.get('completed_at', safe.get('started_at', '-')))}`",
         "",
         "## Risk summary",
@@ -376,7 +386,7 @@ def _write_sarif(path: Path, results: dict[str, Any]) -> None:
         "runs": [{
             "tool": {"driver": {"name": "CyberRecon Pro", "version": str(safe.get("version", "unknown")), "rules": list(rules.values())}},
             "results": sarif_results,
-            "properties": {"target": target, "risk_score": risk.get("score", 0), "risk_severity": risk.get("severity", "unknown")},
+            "properties": {"target": target, "run_id": safe.get("run_id"), "duration_ms": safe.get("duration_ms"), "risk_score": risk.get("score", 0), "risk_severity": risk.get("severity", "unknown")},
         }],
     }
     path.write_text(json.dumps(document, indent=2, ensure_ascii=False), encoding="utf-8")

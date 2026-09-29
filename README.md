@@ -35,6 +35,29 @@ python -m cyberrecon compare reports/old.json reports/new.json --fail-on-change
 The process exits with code `1` when the selected policy is violated and `2`
 when a policy option is invalid.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the test suite on Python 3.10 through 3.13 for
+pushes and pull requests targeting `main`. It also compiles the source and
+builds both wheel and source distributions.
+
+`.github/workflows/security.yml` runs CodeQL, `pip-audit`, and pull-request
+dependency review. Dependabot is configured to keep Python and GitHub Actions
+dependencies current.
+
+Each scan records a unique `run_id`, total runtime, per-stage duration and stage
+status in `telemetry`. These fields are included in JSON, Markdown, SARIF and
+HTML output for monitoring and troubleshooting.
+
+Review stored scan trends with:
+
+```powershell
+python -m cyberrecon history --target example.com --limit 20
+```
+
+The history table shows risk score/severity, runtime, baseline changes and
+module errors without opening each report manually.
+
 Run a focused scan when only a few intelligence sources need refreshing:
 
 ```powershell

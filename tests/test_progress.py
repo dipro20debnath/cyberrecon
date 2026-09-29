@@ -58,6 +58,10 @@ def test_scanner_reports_monotonic_live_progress(tmp_path, monkeypatch):
     events = []
     results = ReconScanner(Config(tmp_path / "config.yaml")).scan("example.com", progress_callback=lambda *event: events.append(event))
     assert results["target"] == "example.com"
+    assert results["run_id"]
+    assert results["duration_ms"] >= 0
+    assert results["telemetry"]["module_status"]["risk"] == "ok"
+    assert results["telemetry"]["total_duration_ms"] == results["duration_ms"]
     assert events[0][0] == 0
     assert events[-1][0] == events[-1][1]
     assert all(event[1] == events[-1][1] for event in events)

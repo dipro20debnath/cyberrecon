@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any, Callable, Optional
+from uuid import uuid4
 
 from cyberrecon.config import Config
 from cyberrecon.integrations import ExternalIntelligence
@@ -52,16 +54,18 @@ class ReconScanner:
             require_active_authorization(info, self.config, confirm_active)
 
         stage_names = self._stage_names(info, mode, only=only, skip=skip)
+        scan_started = perf_counter()
         total_stages = len(stage_names)
         completed_stages = 0
         self._emit_progress(progress_callback, completed_stages, total_stages, "Initializing scan")
 
         results: dict[str, Any] = {
             "tool": "CyberRecon Pro",
-            "version": "1.7.0",
+            "version": "1.9.0",
             "target": info.value,
             "target_type": info.kind,
             "mode": mode,
+            "run_id": str(uuid4()),
             "scan_plan": {
                 "stages": stage_names,
                 "only": only or None,
@@ -70,6 +74,7 @@ class ReconScanner:
             "started_at": datetime.now(timezone.utc).isoformat(),
             "modules": {},
             "errors": [],
+            "telemetry": {"module_durations_ms": {}, "module_status": {}, "total_duration_ms": None},
         }
 
         http_cache = self._http_cache()
@@ -113,31 +118,50 @@ class ReconScanner:
 
         if passive_tasks:
             with ThreadPoolExecutor(max_workers=min(len(passive_tasks), self.config.threads)) as pool:
-                futures = {pool.submit(task): name for name, task in passive_tasks.items()}
+                futures = {}
+                future_started = {}
+                for name, task in passive_tasks.items():
+                    future = pool.submit(task)
+                    futures[future] = name
+                    future_started[future] = perf_counter()
                 for future in as_completed(futures):
                     name = futures[future]
+                    status = "ok"
                     try:
                         results["modules"][name] = future.result()
                     except Exception as exc:
                         results["modules"][name] = {"error": str(exc)}
                         results["errors"].append(f"{name}: {exc}")
+                        status = "error"
+                    self._record_timing(results["telemetry"], name, future_started[future], status)
                     completed_stages += 1
                     self._emit_progress(progress_callback, completed_stages, total_stages, f"{name.replace('_', ' ').title()} complete")
 
         if any(name.startswith("active.") for name in selected):
-            active, completed_stages = self._run_active(
-                info.value,
-                progress_callback=progress_callback,
-                completed=completed_stages,
-                total=total_stages,
-                selected=selected,
-            )
-            results["modules"]["active"] = active
+            active_started = perf_counter()
+            try:
+                active, completed_stages = self._run_active(
+                    info.value,
+                    progress_callback=progress_callback,
+                    completed=completed_stages,
+                    total=total_stages,
+                    selected=selected,
+                )
+                results["modules"]["active"] = active
+            except Exception:
+                self._record_timing(results["telemetry"], "active", active_started, "error")
+                raise
+            else:
+                self._record_timing(results["telemetry"], "active", active_started, "ok")
 
+        risk_started = perf_counter()
         results["risk"] = assess(results)
+        self._record_timing(results["telemetry"], "risk", risk_started, "ok")
         completed_stages += 1
         self._emit_progress(progress_callback, completed_stages, total_stages, "Risk assessment complete")
         results["completed_at"] = datetime.now(timezone.utc).isoformat()
+        results["duration_ms"] = round((perf_counter() - scan_started) * 1000, 2)
+        results["telemetry"]["total_duration_ms"] = results["duration_ms"]
         return to_jsonable(results)
 
     def _http_cache(self) -> JsonFileCache:
@@ -192,6 +216,11 @@ class ReconScanner:
     def _emit_progress(callback: Optional[ProgressCallback], completed: int, total: int, label: str) -> None:
         if callback:
             callback(completed, total, label)
+
+    @staticmethod
+    def _record_timing(telemetry: dict[str, Any], name: str, started: float, status: str) -> None:
+        telemetry["module_durations_ms"][name] = round((perf_counter() - started) * 1000, 2)
+        telemetry["module_status"][name] = status
 
     def _run_active(
         self,
