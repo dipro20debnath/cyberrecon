@@ -74,6 +74,7 @@ grabbing. Only use it with written authorization.
 - `modules/passive`: DNS, WHOIS, CT logs, IP intelligence and HTTP fingerprinting
 - `modules/passive`: TLS certificate inspection and HTTP security-header posture analysis
 - `integrations.py`: optional read-only VirusTotal, URLScan, SecurityTrails, Shodan and Censys lookups
+- `utils/http.py`: shared retry, rate-limit and TTL-cache policy for HTTP intelligence modules
 - `modules/active.py`: guarded wordlist DNS resolution and bounded TCP probes
 - `diffing.py`: validated baseline loading and report change detection
 - `reporting.py`: JSON, CSV and self-contained HTML reports with highlighted findings

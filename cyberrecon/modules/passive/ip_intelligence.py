@@ -8,14 +8,16 @@ from typing import Any, Iterable, Optional
 
 import requests
 
+from cyberrecon.utils.http import JsonFileCache, JsonHttpClient
 from cyberrecon.utils.validators import TargetValidationError, normalize_target
 
 
 class IPIntelligence:
-    def __init__(self, token: Optional[str] = None, timeout: float = 10, session: Optional[requests.Session] = None):
+    def __init__(self, token: Optional[str] = None, timeout: float = 10, session: Optional[requests.Session] = None, retries: int = 2, rate_limit: float = 0.0, cache: Optional[JsonFileCache] = None, user_agent: str = "CyberRecon-Pro/1.0"):
         self.token = token
         self.timeout = max(0.5, float(timeout))
         self.session = session or requests.Session()
+        self.client = JsonHttpClient(timeout=self.timeout, retries=retries, rate_limit=rate_limit, user_agent=user_agent, cache=cache, session=self.session)
 
     def lookup(self, target: str) -> dict[str, Any]:
         result: dict[str, Any] = {"target": target, "ips": [], "records": [], "errors": []}
@@ -35,16 +37,14 @@ class IPIntelligence:
         for address in addresses:
             try:
                 ipaddress.ip_address(address)
-                response = self.session.get(
+                payload = self.client.get_json(
                     f"https://ipinfo.io/{address}/json",
                     params={"token": self.token},
-                    timeout=self.timeout,
+                    cache_key=f"ipinfo:{address}",
                 )
-                response.raise_for_status()
-                payload = response.json()
                 if isinstance(payload, dict):
                     result["records"].append(payload)
-            except (requests.RequestException, ValueError) as exc:
+            except (requests.RequestException, RuntimeError, ValueError) as exc:
                 result["errors"].append(f"{address}: {exc}")
         return result
 

@@ -12,6 +12,7 @@ from cyberrecon.risk import assess
 from cyberrecon.modules.active import PortScanner, SubdomainBruteForcer, require_active_authorization
 from cyberrecon.modules.passive import DNSEnumerator, IPIntelligence, CrtshSubdomainFinder, TechnologyDetector, TLSInspector, WHOISLookup
 from cyberrecon.utils.serialization import to_jsonable
+from cyberrecon.utils.http import JsonFileCache
 from cyberrecon.utils.validators import TargetValidationError, normalize_target
 
 
@@ -71,12 +72,32 @@ class ReconScanner:
             "errors": [],
         }
 
+        http_cache = self._http_cache()
         passive_tasks = {
             "dns": lambda: DNSEnumerator(self.config.timeout).enumerate(info.value),
             "whois": lambda: WHOISLookup().lookup(info.value),
-            "subdomains": lambda: CrtshSubdomainFinder(self.config.timeout, user_agent=self.config.user_agent).find_subdomains(info.value),
-            "ip_intelligence": lambda: IPIntelligence(self.config.get_api_key("ipinfo"), self.config.timeout).lookup(info.value),
-            "technology": lambda: TechnologyDetector(self.config.timeout, user_agent=self.config.user_agent).detect(info.value),
+            "subdomains": lambda: CrtshSubdomainFinder(
+                self.config.timeout,
+                user_agent=self.config.user_agent,
+                retries=self.config.max_retries,
+                rate_limit=self.config.rate_limit,
+                cache=http_cache,
+            ).find_subdomains(info.value),
+            "ip_intelligence": lambda: IPIntelligence(
+                self.config.get_api_key("ipinfo"),
+                self.config.timeout,
+                retries=self.config.max_retries,
+                rate_limit=self.config.rate_limit,
+                cache=http_cache,
+                user_agent=self.config.user_agent,
+            ).lookup(info.value),
+            "technology": lambda: TechnologyDetector(
+                self.config.timeout,
+                user_agent=self.config.user_agent,
+                retries=self.config.max_retries,
+                rate_limit=self.config.rate_limit,
+                cache=http_cache,
+            ).detect(info.value),
             "tls": lambda: TLSInspector(self.config.timeout).inspect(info.value),
             "external_intelligence": lambda: ExternalIntelligence(self.config).collect(info.value),
         }
@@ -111,6 +132,10 @@ class ReconScanner:
         self._emit_progress(progress_callback, completed_stages, total_stages, "Risk assessment complete")
         results["completed_at"] = datetime.now(timezone.utc).isoformat()
         return to_jsonable(results)
+
+    def _http_cache(self) -> JsonFileCache:
+        cache_dir = self.config.config_path.parent / ".cache" / "http"
+        return JsonFileCache(cache_dir, ttl=int(self.config.get("settings.cache_ttl", 3600)))
 
     def _stage_names(self, info: Any, mode: str, only: Optional[str] = None, skip: Optional[str] = None) -> list[str]:
         names = list(PASSIVE_MODULES)

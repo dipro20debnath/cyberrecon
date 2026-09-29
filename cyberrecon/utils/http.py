@@ -88,16 +88,43 @@ class JsonHttpClient:
             if cached is not None:
                 return cached
 
+        response = self._request(url, headers=headers, params=params)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if self.cache:
+            self.cache.set(key, payload)
+        return payload
+
+    def get_text(self, url: str, *, headers: Optional[dict[str, str]] = None, params: Optional[dict[str, Any]] = None, cache_key: Optional[str] = None) -> dict[str, Any]:
+        """Fetch a text response with the same retry/rate-limit/cache policy."""
+
+        key = cache_key or f"TEXT {url} {sorted((params or {}).items())}"
+        if self.cache:
+            cached = self.cache.get(key)
+            if isinstance(cached, dict) and "text" in cached:
+                return cached
+
+        response = self._request(url, headers=headers, params=params)
+        payload = {
+            "text": str(getattr(response, "text", "")),
+            "status_code": getattr(response, "status_code", None),
+            "url": str(getattr(response, "url", url)),
+            "headers": dict(getattr(response, "headers", {}) or {}),
+        }
+        if self.cache:
+            self.cache.set(key, payload)
+        return payload
+
+    def _request(self, url: str, *, headers: Optional[dict[str, str]] = None, params: Optional[dict[str, Any]] = None) -> requests.Response:
         last_error: Optional[Exception] = None
         for attempt in range(self.retries + 1):
             try:
                 self.rate_limiter.wait()
                 response = self.session.get(url, headers=headers, params=params, timeout=self.timeout)
                 response.raise_for_status()
-                payload = response.json()
-                if self.cache:
-                    self.cache.set(key, payload)
-                return payload
+                return response
             except (requests.RequestException, ValueError) as exc:
                 last_error = exc
                 if attempt < self.retries:
