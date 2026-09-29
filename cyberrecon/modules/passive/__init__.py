@@ -8,6 +8,7 @@ from cyberrecon.modules.passive.ip_intelligence import IPIntelligence
 from cyberrecon.modules.passive.technology import TechnologyDetector
 from cyberrecon.modules.passive.security import SecurityHeadersAuditor
 from cyberrecon.modules.passive.tls import TLSInspector
+from cyberrecon.modules.passive.web_metadata import WebMetadataCollector
 
 __all__ = [
     "DNSEnumerator",
@@ -17,4 +18,5 @@ __all__ = [
     "TechnologyDetector",
     "SecurityHeadersAuditor",
     "TLSInspector",
+    "WebMetadataCollector",
 ]

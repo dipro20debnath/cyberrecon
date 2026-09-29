@@ -38,6 +38,11 @@ class _INTEL:
     def collect(self, target): return {"sources": {}, "skipped": []}
 
 
+class _WEB:
+    def __init__(self, *args, **kwargs): pass
+    def collect(self, target): return {"resources": {}, "robots": {}, "sitemap": {}, "security_txt": {}, "errors": []}
+
+
 def test_scanner_reports_monotonic_live_progress(tmp_path, monkeypatch):
     import cyberrecon.scanner as scanner_module
 
@@ -48,6 +53,7 @@ def test_scanner_reports_monotonic_live_progress(tmp_path, monkeypatch):
     monkeypatch.setattr(scanner_module, "TechnologyDetector", _TECH)
     monkeypatch.setattr(scanner_module, "TLSInspector", _TLS)
     monkeypatch.setattr(scanner_module, "ExternalIntelligence", _INTEL)
+    monkeypatch.setattr(scanner_module, "WebMetadataCollector", _WEB)
 
     events = []
     results = ReconScanner(Config(tmp_path / "config.yaml")).scan("example.com", progress_callback=lambda *event: events.append(event))

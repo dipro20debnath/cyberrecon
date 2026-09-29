@@ -14,6 +14,7 @@ from rich.table import Table
 
 from cyberrecon.config import Config, ConfigError, config
 from cyberrecon.diffing import ComparisonError, compare_reports, discover_json_reports, load_json_report
+from cyberrecon.policy import PolicyError, evaluate_gate
 from cyberrecon.reporting import ReportError, write_report
 from cyberrecon.scanner import ReconScanner, ScanError
 from cyberrecon.utils.validators import safe_filename
@@ -26,6 +27,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+SUPPORTED_OUTPUTS = {"json", "csv", "html", "md", "markdown", "sarif"}
 
 
 def print_banner() -> None:
@@ -51,17 +53,18 @@ def main(
 def scan(
     target: str = typer.Argument(..., help="Domain name or IP address"),
     mode: str = typer.Option("passive", "--mode", "-m", help="passive, active or full"),
-    output: str = typer.Option("json", "--output", "-o", help="json, csv or html"),
+    output: str = typer.Option("json", "--output", "-o", help="json, csv, html, md/markdown or sarif"),
     confirm_active: bool = typer.Option(False, "--confirm-active", help="Confirm you are authorized for active checks"),
     baseline: str = typer.Option("", "--baseline", help="Previous JSON report to compare against"),
     only: str = typer.Option("", "--only", help="Comma-separated modules to run, for example dns,tls"),
     skip: str = typer.Option("", "--skip", help="Comma-separated modules to skip"),
+    fail_on: str = typer.Option("", "--fail-on", help="Exit 1 when risk reaches low, medium, high or critical"),
 ) -> None:
     """Run a reconnaissance scan and save a report."""
 
     print_banner()
-    if output.lower().lstrip(".") not in {"json", "csv", "html"}:
-        console.print("[red]Scan failed:[/red] Output format must be json, csv or html")
+    if output.lower().lstrip(".") not in SUPPORTED_OUTPUTS:
+        console.print("[red]Scan failed:[/red] Output format must be json, csv, html, md/markdown or sarif")
         raise typer.Exit(code=2)
     try:
         with Progress(
@@ -96,7 +99,7 @@ def scan(
             results["current"] = comparison["current"]
             suffix = "scan_with_baseline"
         path = write_report(results, config.output_dir, target, output, suffix=suffix)
-    except (ScanError, ReportError, ComparisonError, ConfigError, PermissionError, OSError) as exc:
+    except (ScanError, ReportError, ComparisonError, PolicyError, ConfigError, PermissionError, OSError) as exc:
         console.print(f"[red]Scan failed:[/red] {exc}")
         raise typer.Exit(code=2) from exc
 
@@ -112,19 +115,29 @@ def scan(
         table.add_row("Baseline changes", f"+{summary.get('added', 0)} / -{summary.get('removed', 0)}")
     table.add_row("Report", str(path))
     console.print(table)
+    try:
+        gate_reasons = evaluate_gate(results, fail_on=fail_on)
+    except PolicyError as exc:
+        console.print(f"[red]Policy failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    if gate_reasons:
+        console.print("[red]Quality gate failed:[/red] " + "; ".join(gate_reasons))
+        raise typer.Exit(code=1)
 
 
 @app.command()
 def compare(
     baseline: str = typer.Argument(..., help="Previous JSON report path"),
     current: str = typer.Argument(..., help="Current JSON report path"),
-    output: str = typer.Option("html", "--output", "-o", help="json, csv or html"),
+    output: str = typer.Option("html", "--output", "-o", help="json, csv, html, md/markdown or sarif"),
+    fail_on: str = typer.Option("", "--fail-on", help="Exit 1 when current risk reaches this severity"),
+    fail_on_change: bool = typer.Option(False, "--fail-on-change", help="Exit 1 when any baseline change is detected"),
 ) -> None:
     """Compare two JSON reports for the same target."""
 
     print_banner()
-    if output.lower().lstrip(".") not in {"json", "csv", "html"}:
-        console.print("[red]Comparison failed:[/red] Output format must be json, csv or html")
+    if output.lower().lstrip(".") not in SUPPORTED_OUTPUTS:
+        console.print("[red]Comparison failed:[/red] Output format must be json, csv, html, md/markdown or sarif")
         raise typer.Exit(code=2)
     baseline_path = Path(baseline).expanduser()
     current_path = Path(current).expanduser()
@@ -134,7 +147,7 @@ def compare(
         comparison["current"]["source"] = str(current_path)
         target_label = f"{safe_filename(current_path.stem)}_vs_{safe_filename(baseline_path.stem)}"
         path = write_report(comparison, config.output_dir, target_label, output, suffix="comparison")
-    except (ComparisonError, ReportError, ConfigError, PermissionError, OSError) as exc:
+    except (ComparisonError, ReportError, PolicyError, ConfigError, PermissionError, OSError) as exc:
         console.print(f"[red]Comparison failed:[/red] {exc}")
         if "not found" in str(exc).lower():
             available = discover_json_reports(config.output_dir)
@@ -156,6 +169,14 @@ def compare(
     table.add_row("Risk delta", str(changes.get("risk", {}).get("delta", "unknown")))
     table.add_row("Report", str(path))
     console.print(table)
+    try:
+        gate_reasons = evaluate_gate(comparison, fail_on=fail_on, fail_on_change=fail_on_change)
+    except PolicyError as exc:
+        console.print(f"[red]Policy failed:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    if gate_reasons:
+        console.print("[red]Quality gate failed:[/red] " + "; ".join(gate_reasons))
+        raise typer.Exit(code=1)
 
 
 @app.command(name="reports")

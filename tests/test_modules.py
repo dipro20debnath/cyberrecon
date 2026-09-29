@@ -19,6 +19,25 @@ class FakeSession:
         )
 
 
+class FakeAnswers(list):
+    rrset = SimpleNamespace(ttl=300)
+
+
+class FakeDNSResolver:
+    timeout = 0
+    lifetime = 0
+
+    def resolve(self, name, record_type):
+        values = {
+            ("example.com", "MX"): [SimpleNamespace(exchange=SimpleNamespace(to_text=lambda omit_final_dot=True: "mail.example.com"), preference=10)],
+            ("example.com", "TXT"): [SimpleNamespace(strings=[b"v=spf1 -all"])],
+            ("example.com", "CAA"): [SimpleNamespace(__str__=lambda self: '0 issue "letsencrypt.org"')],
+            ("example.com", "DNSKEY"): [SimpleNamespace(__str__=lambda self: "256 3 13 key")],
+            ("_dmarc.example.com", "TXT"): [SimpleNamespace(strings=[b"v=DMARC1; p=quarantine"])],
+        }
+        return FakeAnswers(values.get((name, record_type), []))
+
+
 def test_crtsh_filters_to_requested_domain():
     session = FakeSession([
         {"name_value": "*.example.com\napi.example.com\nevil-example.com", "id": 1},
@@ -36,6 +55,15 @@ def test_crtsh_can_exclude_wildcard_names():
 def test_dns_invalid_target_is_reported():
     result = DNSEnumerator().enumerate("not a target")
     assert result["errors"]
+
+
+def test_dns_posture_detects_dnssec_caa_spf_and_dmarc():
+    result = DNSEnumerator(resolver=FakeDNSResolver()).enumerate("example.com")
+    posture = result["posture"]
+    assert posture["dnssec"]["status"] == "key_material_detected"
+    assert posture["caa"]["present"] is True
+    assert posture["email_authentication"]["spf"]["present"] is True
+    assert posture["email_authentication"]["dmarc"]["policy"] == "quarantine"
 
 
 def test_security_audit_accepts_csp_frame_ancestors():

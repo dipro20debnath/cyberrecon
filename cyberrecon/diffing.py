@@ -116,6 +116,28 @@ def _open_ports(report: dict[str, Any]) -> list[dict[str, Any]]:
     return [normalized[key] for key in sorted(normalized)]
 
 
+def _web_paths(report: dict[str, Any]) -> list[dict[str, str]]:
+    module = _module(report, "web_metadata")
+    values: set[tuple[str, str]] = set()
+    robots = module.get("robots", {})
+    if isinstance(robots, dict):
+        for category in ("disallow", "allow", "sitemaps"):
+            entries = robots.get(category, [])
+            for entry in entries if isinstance(entries, list) else []:
+                values.add((f"robots:{category}", str(entry)))
+    sitemap = module.get("sitemap", {})
+    if isinstance(sitemap, dict):
+        for entry in sitemap.get("locations", []) if isinstance(sitemap.get("locations", []), list) else []:
+            values.add(("sitemap:location", str(entry)))
+    security = module.get("security_txt", {})
+    if isinstance(security, dict):
+        for key, value in security.items():
+            entries = value if isinstance(value, list) else [value]
+            for entry in entries:
+                values.add((f"security.txt:{key}", str(entry)))
+    return [{"kind": kind, "value": value} for kind, value in sorted(values)]
+
+
 def _set_diff(baseline: Iterable[Any], current: Iterable[Any]) -> dict[str, list[Any]]:
     before = set(baseline)
     after = set(current)
@@ -208,6 +230,7 @@ def compare_reports(baseline: dict[str, Any], current: dict[str, Any]) -> dict[s
         "technologies": _set_diff(technologies_before, technologies_after),
         "security_findings": _dict_diff(findings_before, findings_after, ("severity", "header", "message")),
         "open_ports": _dict_diff(ports_before, ports_after, ("port", "service")),
+        "web_paths": _dict_diff(_web_paths(baseline), _web_paths(current), ("kind", "value")),
         "risk": {
             "baseline": before_risk,
             "current": after_risk,

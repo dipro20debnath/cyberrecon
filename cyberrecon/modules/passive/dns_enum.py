@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import re
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
@@ -27,7 +28,7 @@ class DNSRecord:
 class DNSEnumerator:
     """Collect common DNS records without hiding resolver failures."""
 
-    COMMON_RECORD_TYPES = ("A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA")
+    COMMON_RECORD_TYPES = ("A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA", "CAA", "DNSKEY", "DS", "RRSIG")
 
     def __init__(self, timeout: float = 10, resolver: Optional[dns.resolver.Resolver] = None):
         self.timeout = max(0.5, float(timeout))
@@ -61,9 +62,48 @@ class DNSEnumerator:
                 records = self._query_records(info.value, record_type, result["errors"])
                 if records:
                     result["records"][record_type] = [asdict(record) for record in records]
+            dmarc_records = self._query_records(f"_dmarc.{info.value}", "TXT", result["errors"], name=f"_dmarc.{info.value}")
+            if dmarc_records:
+                result["records"]["DMARC"] = [asdict(record) for record in dmarc_records]
 
+        result["posture"] = self._analyze_posture(result["records"])
         result["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
         return result
+
+    @classmethod
+    def _analyze_posture(cls, records: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        def values(record_type: str) -> list[str]:
+            return [str(item.get("value", "")) for item in records.get(record_type, []) if isinstance(item, dict)]
+
+        txt_values = values("TXT")
+        spf_records = [value for value in txt_values if value.lower().startswith("v=spf1")]
+        dmarc_records = values("DMARC")
+        dmarc_policy = None
+        if dmarc_records:
+            match = re.search(r"(?:^|;)\s*p\s*=\s*([^;\s]+)", dmarc_records[0], re.IGNORECASE)
+            dmarc_policy = match.group(1).lower() if match else None
+
+        caa_records = values("CAA")
+        issuers: set[str] = set()
+        for value in caa_records:
+            for match in re.finditer(r"\bissue(?:wild)?\s+['\"]?([^'\"\s;]+)", value, re.IGNORECASE):
+                issuers.add(match.group(1))
+
+        dnssec_types = [record_type for record_type in ("DNSKEY", "DS", "RRSIG") if records.get(record_type)]
+        return {
+            "dnssec": {
+                "status": "deployed" if any(record_type in dnssec_types for record_type in ("DS", "RRSIG")) else "key_material_detected" if dnssec_types else "not_detected",
+                "record_types": dnssec_types,
+                "validated": False,
+                "note": "Record presence is reported; cryptographic chain validation is not performed.",
+            },
+            "caa": {"present": bool(caa_records), "records": caa_records, "issuers": sorted(issuers)},
+            "email_authentication": {
+                "mail_enabled": bool(records.get("MX")),
+                "spf": {"present": bool(spf_records), "records": spf_records},
+                "dmarc": {"present": bool(dmarc_records), "records": dmarc_records, "policy": dmarc_policy},
+            },
+        }
 
     def _query_records(
         self,

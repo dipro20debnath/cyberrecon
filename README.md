@@ -15,6 +15,26 @@ Use `--output csv` or `--output html` for the other report formats. API keys can
 be set with environment variables such as `CR_VIRUSTOTAL_API_KEY` or with
 `python -m cyberrecon config-set api_keys.virustotal YOUR_KEY`.
 
+For documentation or CI ingestion, use Markdown or SARIF output:
+
+```powershell
+python -m cyberrecon scan example.com --output md
+python -m cyberrecon scan example.com --output sarif
+```
+
+SARIF 2.1.0 contains risk indicators, HTTP security findings and scan errors
+with the target attached as a location.
+
+CI quality gates can fail the command after writing its report:
+
+```powershell
+python -m cyberrecon scan example.com --output sarif --fail-on high
+python -m cyberrecon compare reports/old.json reports/new.json --fail-on-change
+```
+
+The process exits with code `1` when the selected policy is violated and `2`
+when a policy option is invalid.
+
 Run a focused scan when only a few intelligence sources need refreshing:
 
 ```powershell
@@ -71,12 +91,13 @@ grabbing. Only use it with written authorization.
 ## Architecture
 
 - `config.py`: validated, deep-merged YAML configuration with atomic writes
-- `modules/passive`: DNS, WHOIS, CT logs, IP intelligence and HTTP fingerprinting
+- `modules/passive`: DNS, WHOIS, CT logs, IP intelligence, HTTP fingerprinting and public web metadata
+- DNS reports include DNSSEC evidence, CAA issuers and mail-domain SPF/DMARC posture analysis
 - `modules/passive`: TLS certificate inspection and HTTP security-header posture analysis
 - `integrations.py`: optional read-only VirusTotal, URLScan, SecurityTrails, Shodan and Censys lookups
 - `utils/http.py`: shared retry, rate-limit and TTL-cache policy for HTTP intelligence modules
 - `modules/active.py`: guarded wordlist DNS resolution and bounded TCP probes
 - `diffing.py`: validated baseline loading and report change detection
-- `reporting.py`: JSON, CSV and self-contained HTML reports with highlighted findings
+- `reporting.py`: JSON, CSV, Markdown, SARIF and self-contained HTML reports with highlighted findings
 - `risk.py`: conservative heuristic indicators, not a vulnerability score
 - `tests/`: offline unit tests with network calls mocked or avoided

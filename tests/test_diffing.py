@@ -19,6 +19,7 @@ def _report(*, current: bool) -> dict:
             },
             "active": {"ports": {"ports": [] if not current else [{"port": 8080, "service": "http-alt", "state": "open"}]}},
             "tls": {"certificate": {"days_until_expiry": 90 if not current else 12}},
+            "web_metadata": {"robots": {"disallow": ["/old" if not current else "/new"], "allow": [], "sitemaps": []}, "sitemap": {"locations": []}, "security_txt": {}},
         },
     }
 
@@ -33,6 +34,7 @@ def test_compare_reports_detects_high_signal_changes():
     assert comparison["tls"]["delta_days"] == -78
     assert comparison["open_ports"]["added"] == [{"port": 8080, "service": "http-alt"}]
     assert "www.example.com" in comparison["subdomains"]["removed"]
+    assert comparison["web_paths"]["added"] == [{"kind": "robots:disallow", "value": "/new"}]
 
 
 def test_compare_reports_rejects_different_targets():

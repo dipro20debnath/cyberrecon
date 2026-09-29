@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -61,7 +62,19 @@ def _render_dns(module: dict[str, Any]) -> str:
                 rows.append([escape(record_type), escape(str(record)), ""])
     errors = module.get("errors", [])
     error_html = f'<div class="callout warning">{escape("; ".join(map(str, errors)))}</div>' if errors else ""
-    return error_html + _table(["Type", "Value", "TTL"], rows, "No DNS records returned")
+    posture = module.get("posture", {}) if isinstance(module.get("posture"), dict) else {}
+    dnssec = posture.get("dnssec", {}) if isinstance(posture.get("dnssec"), dict) else {}
+    caa = posture.get("caa", {}) if isinstance(posture.get("caa"), dict) else {}
+    email = posture.get("email_authentication", {}) if isinstance(posture.get("email_authentication"), dict) else {}
+    spf = email.get("spf", {}) if isinstance(email.get("spf"), dict) else {}
+    dmarc = email.get("dmarc", {}) if isinstance(email.get("dmarc"), dict) else {}
+    posture_rows = [
+        ["DNSSEC", _badge("info" if dnssec.get("status") == "deployed" else "medium" if dnssec.get("status") == "key_material_detected" else "neutral"), escape(str(dnssec.get("status", "unknown")))],
+        ["CAA policy", _badge("info" if caa.get("present") else "neutral"), escape(", ".join(map(str, caa.get("issuers", []))) or ("Present" if caa.get("present") else "Not detected"))],
+        ["SPF", _badge("info" if spf.get("present") else "high" if email.get("mail_enabled") else "neutral"), escape("Present" if spf.get("present") else "Not detected")],
+        ["DMARC", _badge("info" if dmarc.get("present") and dmarc.get("policy") != "none" else "medium" if email.get("mail_enabled") else "neutral"), escape(str(dmarc.get("policy") or ("Present" if dmarc.get("present") else "Not detected")))],
+    ]
+    return error_html + _table(["Type", "Value", "TTL"], rows, "No DNS records returned") + "<h3>DNS security posture</h3>" + _table(["Control", "Status", "Details"], posture_rows, "No DNS posture data")
 
 
 def _render_whois(module: dict[str, Any]) -> str:
@@ -88,6 +101,46 @@ def _render_technology(module: dict[str, Any]) -> str:
     findings = security.get("findings", []) if isinstance(security, dict) else []
     finding_rows = [[_badge(item.get("severity")), escape(str(item.get("header", ""))), escape(str(item.get("message", "")))] for item in findings]
     return f'<div class="tag-list">{tech_html}</div><p>HTTP status: <strong>{escape(str(module.get("status_code", "unknown")))}</strong> | URL: <code>{escape(str(module.get("final_url") or module.get("url") or "unknown"))}</code></p><h3>Security findings</h3>{_table(["Severity", "Header", "Finding"], finding_rows, "No header findings")}'
+
+
+def _render_web_metadata(module: dict[str, Any]) -> str:
+    resources = module.get("resources", {}) if isinstance(module.get("resources"), dict) else {}
+    resource_rows = []
+    for name in ("security.txt", "robots.txt", "sitemap.xml"):
+        item = resources.get(name, {}) if isinstance(resources.get(name), dict) else {}
+        available = bool(item.get("available"))
+        resource_rows.append([
+            _badge("info" if available else "neutral"),
+            escape(name),
+            escape(str(item.get("status_code", "not requested"))),
+            escape(str(item.get("content_type") or "unknown")),
+            escape(str(item.get("bytes", 0))),
+            escape(str(item.get("url") or "-")),
+        ])
+
+    robots = module.get("robots", {}) if isinstance(module.get("robots"), dict) else {}
+    robots_rows = []
+    for category in ("disallow", "allow", "sitemaps"):
+        values = robots.get(category, [])
+        for value in values if isinstance(values, list) else []:
+            robots_rows.append([escape(category.title()), escape(str(value))])
+
+    sitemap = module.get("sitemap", {}) if isinstance(module.get("sitemap"), dict) else {}
+    sitemap_rows = [[escape(str(value))] for value in sitemap.get("locations", []) if value]
+    security = module.get("security_txt", {}) if isinstance(module.get("security_txt"), dict) else {}
+    security_rows = [[escape(str(key).replace("_", " ").title()), escape(str(value))] for key, value in security.items()]
+    errors = module.get("errors", [])
+    error_html = f'<div class="callout warning">{escape("; ".join(map(str, errors)))}</div>' if errors else ""
+    return (
+        error_html
+        + _table(["Status", "Resource", "HTTP", "Content type", "Bytes", "URL"], resource_rows, "No web metadata resources")
+        + "<h3>Robots directives</h3>"
+        + _table(["Directive", "Value"], robots_rows, "No robots directives found")
+        + "<h3>Sitemap locations</h3>"
+        + _table(["URL"], sitemap_rows, "No sitemap locations found")
+        + "<h3>Security.txt fields</h3>"
+        + _table(["Field", "Value"], security_rows, "No security.txt fields found")
+    )
 
 
 def _render_tls(module: dict[str, Any]) -> str:
@@ -138,6 +191,7 @@ def _render_comparison(comparison: dict[str, Any]) -> str:
         ("Technology changes", "technologies", [], ["Change", "Technology"]),
         ("Security finding changes", "security_findings", ["severity", "header", "message"], ["Change", "Severity", "Header", "Finding"]),
         ("Open port changes", "open_ports", ["port", "service"], ["Change", "Port", "Service"]),
+        ("Web metadata changes", "web_paths", ["kind", "value"], ["Change", "Source", "Value"]),
     )
     for title, key, fields, headers in definitions:
         values = comparison.get(key, {})
@@ -187,6 +241,8 @@ def _write_html(path: Path, results: dict[str, Any]) -> None:
         sections.append(_module_section("Certificate Transparency subdomains", _render_subdomains(modules["subdomains"]), "subdomains"))
     if "technology" in modules:
         sections.append(_module_section("Technology and HTTP security", _render_technology(modules["technology"]), "technology"))
+    if "web_metadata" in modules:
+        sections.append(_module_section("Public web metadata", _render_web_metadata(modules["web_metadata"]), "web-metadata"))
     if "tls" in modules:
         sections.append(_module_section("TLS certificate", _render_tls(modules["tls"]), "tls"))
     if "active" in modules:
@@ -206,12 +262,133 @@ h1{{margin:0;font-size:clamp(1.7rem,4vw,2.8rem);word-break:break-word}} h2{{marg
     path.write_text(html, encoding="utf-8")
 
 
+def _markdown_value(value: Any) -> str:
+    return str(value if value is not None else "-").replace("|", "\\|").replace("\r", "").replace("\n", " ")
+
+
+def _markdown_table(headers: list[str], rows: list[list[Any]]) -> list[str]:
+    lines = ["| " + " | ".join(_markdown_value(item) for item in headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
+    lines.extend("| " + " | ".join(_markdown_value(item) for item in row) + " |" for row in rows)
+    return lines
+
+
+def _write_markdown(path: Path, results: dict[str, Any]) -> None:
+    safe = to_jsonable(results)
+    target = safe.get("target", "Unknown target")
+    risk = safe.get("risk", {}) if isinstance(safe.get("risk"), dict) else {}
+    lines = [
+        "# CyberRecon Pro Report",
+        "",
+        f"**Target:** `{_markdown_value(target)}`  ",
+        f"**Mode:** `{_markdown_value(safe.get('mode', 'passive'))}`  ",
+        f"**Generated:** `{_markdown_value(safe.get('completed_at', safe.get('started_at', '-')))}`",
+        "",
+        "## Risk summary",
+        "",
+    ]
+    lines += _markdown_table(["Metric", "Value"], [["Score", f"{risk.get('score', 0)}/100"], ["Severity", risk.get("severity", "unknown")], ["Errors", len(safe.get("errors", []))]])
+    indicators = risk.get("indicators", []) if isinstance(risk.get("indicators"), list) else []
+    if indicators:
+        lines += ["", "## Important findings", ""]
+        lines += _markdown_table(["Severity", "Indicator", "Details"], [[item.get("severity", "unknown"), item.get("name", ""), item.get("message", item.get("ports", item.get("count", "")))] for item in indicators])
+
+    modules = safe.get("modules", {}) if isinstance(safe.get("modules"), dict) else {}
+    dns = modules.get("dns") if isinstance(modules.get("dns"), dict) else None
+    if dns:
+        lines += ["", "## DNS intelligence", ""]
+        dns_rows = []
+        for record_type, records in dns.get("records", {}).items() if isinstance(dns.get("records"), dict) else []:
+            for record in records if isinstance(records, list) else []:
+                if isinstance(record, dict):
+                    dns_rows.append([record_type, record.get("name", ""), record.get("value", ""), record.get("ttl", "")])
+        lines += _markdown_table(["Type", "Name", "Value", "TTL"], dns_rows)
+        posture = dns.get("posture") if isinstance(dns.get("posture"), dict) else {}
+        if posture:
+            email = posture.get("email_authentication", {}) if isinstance(posture.get("email_authentication"), dict) else {}
+            spf = email.get("spf", {}) if isinstance(email.get("spf"), dict) else {}
+            dmarc = email.get("dmarc", {}) if isinstance(email.get("dmarc"), dict) else {}
+            dnssec = posture.get("dnssec", {}) if isinstance(posture.get("dnssec"), dict) else {}
+            caa = posture.get("caa", {}) if isinstance(posture.get("caa"), dict) else {}
+            lines += ["", "### DNS security posture", ""]
+            lines += _markdown_table(["Control", "Status"], [["DNSSEC", dnssec.get("status", "unknown")], ["CAA", ", ".join(caa.get("issuers", [])) or "Not detected"], ["SPF", "Present" if spf.get("present") else "Not detected"], ["DMARC", dmarc.get("policy") or ("Present" if dmarc.get("present") else "Not detected")]])
+
+    comparison = safe.get("comparison") if isinstance(safe.get("comparison"), dict) else None
+    if comparison:
+        summary = comparison.get("summary", {}) if isinstance(comparison.get("summary"), dict) else {}
+        lines += ["", "## Changes since baseline", "", f"Added: **{summary.get('added', 0)}**; Removed: **{summary.get('removed', 0)}**", ""]
+        for key, value in comparison.items():
+            if not isinstance(value, dict) or not (value.get("added") or value.get("removed")):
+                continue
+            lines += [f"### {key.replace('_', ' ').title()}", ""]
+            rows = [["Added", item] for item in value.get("added", [])] + [["Removed", item] for item in value.get("removed", [])]
+            lines += _markdown_table(["Change", "Value"], rows)
+
+    if safe.get("errors"):
+        lines += ["", "## Scan errors", ""]
+        lines.extend(f"- {_markdown_value(error)}" for error in safe["errors"])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _sarif_level(severity: Any) -> str:
+    return "error" if str(severity).lower() in {"high", "critical"} else "warning" if str(severity).lower() == "medium" else "note"
+
+
+def _write_sarif(path: Path, results: dict[str, Any]) -> None:
+    safe = to_jsonable(results)
+    target = str(safe.get("target", "unknown"))
+    uri = target if "://" in target else f"https://{target}"
+    risk = safe.get("risk", {}) if isinstance(safe.get("risk"), dict) else {}
+    findings: list[tuple[str, str, str, str]] = []
+
+    for item in risk.get("indicators", []) if isinstance(risk.get("indicators"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        rule_id = f"risk.{item.get('name', 'indicator')}"
+        details = item.get("message", item.get("ports", item.get("count", "")))
+        findings.append((rule_id, str(item.get("severity", "low")), str(details), "heuristic risk indicator"))
+
+    technology = safe.get("modules", {}).get("technology", {}) if isinstance(safe.get("modules"), dict) else {}
+    security = technology.get("security", {}) if isinstance(technology, dict) else {}
+    for item in security.get("findings", []) if isinstance(security, dict) and isinstance(security.get("findings"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        rule_id = f"http.{item.get('header', 'security-header')}"
+        findings.append((rule_id, str(item.get("severity", "low")), str(item.get("message", "HTTP security finding")), "HTTP security header audit"))
+
+    for error in safe.get("errors", []) if isinstance(safe.get("errors"), list) else []:
+        findings.append(("scan.error", "high", str(error), "scan execution"))
+
+    rules: dict[str, dict[str, Any]] = {}
+    sarif_results = []
+    for rule_id, severity, message, source in findings:
+        normalized_id = re.sub(r"[^A-Za-z0-9_.-]", "-", rule_id)
+        rules.setdefault(normalized_id, {"id": normalized_id, "shortDescription": {"text": normalized_id}, "properties": {"source": source}})
+        sarif_results.append({
+            "ruleId": normalized_id,
+            "level": _sarif_level(severity),
+            "message": {"text": message},
+            "locations": [{"physicalLocation": {"artifactLocation": {"uri": uri}}}],
+        })
+
+    document = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {"name": "CyberRecon Pro", "version": str(safe.get("version", "unknown")), "rules": list(rules.values())}},
+            "results": sarif_results,
+            "properties": {"target": target, "risk_score": risk.get("score", 0), "risk_severity": risk.get("severity", "unknown")},
+        }],
+    }
+    path.write_text(json.dumps(document, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def write_report(results: dict[str, Any], output_dir: Path, target: str, fmt: str, suffix: str = "scan") -> Path:
     """Write a report and return its path."""
 
     fmt = fmt.lower().lstrip(".")
-    if fmt not in {"json", "csv", "html"}:
-        raise ReportError("Output format must be json, csv or html")
+    fmt = {"markdown": "md"}.get(fmt, fmt)
+    if fmt not in {"json", "csv", "html", "md", "sarif"}:
+        raise ReportError("Output format must be json, csv, html, md/markdown or sarif")
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{safe_filename(target)}_{safe_filename(suffix)}.{fmt}"
     safe_results = to_jsonable(results)
@@ -223,6 +400,10 @@ def write_report(results: dict[str, Any], output_dir: Path, target: str, fmt: st
             writer = csv.writer(handle)
             writer.writerow(["field", "type", "value"])
             writer.writerows(_flatten(safe_results))
-    else:
+    elif fmt == "html":
         _write_html(path, safe_results)
+    elif fmt == "md":
+        _write_markdown(path, safe_results)
+    else:
+        _write_sarif(path, safe_results)
     return path

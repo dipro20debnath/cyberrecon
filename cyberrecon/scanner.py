@@ -10,7 +10,7 @@ from cyberrecon.config import Config
 from cyberrecon.integrations import ExternalIntelligence
 from cyberrecon.risk import assess
 from cyberrecon.modules.active import PortScanner, SubdomainBruteForcer, require_active_authorization
-from cyberrecon.modules.passive import DNSEnumerator, IPIntelligence, CrtshSubdomainFinder, TechnologyDetector, TLSInspector, WHOISLookup
+from cyberrecon.modules.passive import DNSEnumerator, IPIntelligence, CrtshSubdomainFinder, TechnologyDetector, TLSInspector, WHOISLookup, WebMetadataCollector
 from cyberrecon.utils.serialization import to_jsonable
 from cyberrecon.utils.http import JsonFileCache
 from cyberrecon.utils.validators import TargetValidationError, normalize_target
@@ -22,7 +22,7 @@ class ScanError(ValueError):
 
 ProgressCallback = Callable[[int, int, str], None]
 
-PASSIVE_MODULES = ("dns", "whois", "subdomains", "ip_intelligence", "technology", "tls", "external_intelligence")
+PASSIVE_MODULES = ("dns", "whois", "subdomains", "ip_intelligence", "technology", "tls", "web_metadata", "external_intelligence")
 ACTIVE_MODULES = ("active.ports", "active.subdomains", "active.zone_transfer", "active.screenshot")
 MODULE_ALIASES = {"ports": "active.ports", "active_ports": "active.ports", "active_subdomains": "active.subdomains"}
 
@@ -58,7 +58,7 @@ class ReconScanner:
 
         results: dict[str, Any] = {
             "tool": "CyberRecon Pro",
-            "version": "1.3.0",
+            "version": "1.7.0",
             "target": info.value,
             "target_type": info.kind,
             "mode": mode,
@@ -99,6 +99,13 @@ class ReconScanner:
                 cache=http_cache,
             ).detect(info.value),
             "tls": lambda: TLSInspector(self.config.timeout).inspect(info.value),
+            "web_metadata": lambda: WebMetadataCollector(
+                self.config.timeout,
+                user_agent=self.config.user_agent,
+                retries=self.config.max_retries,
+                rate_limit=self.config.rate_limit,
+                cache=http_cache,
+            ).collect(info.value),
             "external_intelligence": lambda: ExternalIntelligence(self.config).collect(info.value),
         }
         selected = set(stage_names)

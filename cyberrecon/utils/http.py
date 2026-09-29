@@ -97,7 +97,7 @@ class JsonHttpClient:
             self.cache.set(key, payload)
         return payload
 
-    def get_text(self, url: str, *, headers: Optional[dict[str, str]] = None, params: Optional[dict[str, Any]] = None, cache_key: Optional[str] = None) -> dict[str, Any]:
+    def get_text(self, url: str, *, headers: Optional[dict[str, str]] = None, params: Optional[dict[str, Any]] = None, cache_key: Optional[str] = None, raise_for_status: bool = True) -> dict[str, Any]:
         """Fetch a text response with the same retry/rate-limit/cache policy."""
 
         key = cache_key or f"TEXT {url} {sorted((params or {}).items())}"
@@ -106,7 +106,7 @@ class JsonHttpClient:
             if isinstance(cached, dict) and "text" in cached:
                 return cached
 
-        response = self._request(url, headers=headers, params=params)
+        response = self._request(url, headers=headers, params=params, raise_for_status=raise_for_status)
         payload = {
             "text": str(getattr(response, "text", "")),
             "status_code": getattr(response, "status_code", None),
@@ -117,13 +117,14 @@ class JsonHttpClient:
             self.cache.set(key, payload)
         return payload
 
-    def _request(self, url: str, *, headers: Optional[dict[str, str]] = None, params: Optional[dict[str, Any]] = None) -> requests.Response:
+    def _request(self, url: str, *, headers: Optional[dict[str, str]] = None, params: Optional[dict[str, Any]] = None, raise_for_status: bool = True) -> requests.Response:
         last_error: Optional[Exception] = None
         for attempt in range(self.retries + 1):
             try:
                 self.rate_limiter.wait()
                 response = self.session.get(url, headers=headers, params=params, timeout=self.timeout)
-                response.raise_for_status()
+                if raise_for_status:
+                    response.raise_for_status()
                 return response
             except (requests.RequestException, ValueError) as exc:
                 last_error = exc

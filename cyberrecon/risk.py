@@ -16,6 +16,21 @@ def assess(results: dict[str, Any]) -> dict[str, Any]:
         score += 40
         indicators.append({"severity": "high", "name": "zone_transfer", "message": "Authoritative DNS server allowed AXFR"})
 
+    posture = dns.get("posture", {}) if isinstance(dns, dict) else {}
+    email = posture.get("email_authentication", {}) if isinstance(posture, dict) else {}
+    if email.get("mail_enabled"):
+        spf = email.get("spf", {}) if isinstance(email.get("spf"), dict) else {}
+        dmarc = email.get("dmarc", {}) if isinstance(email.get("dmarc"), dict) else {}
+        if not spf.get("present"):
+            score += 5
+            indicators.append({"severity": "low", "name": "spf_missing", "message": "Mail exchanger exists but no SPF record was detected"})
+        if not dmarc.get("present"):
+            score += 8
+            indicators.append({"severity": "medium", "name": "dmarc_missing", "message": "Mail exchanger exists but no DMARC record was detected"})
+        elif dmarc.get("policy") == "none":
+            score += 3
+            indicators.append({"severity": "low", "name": "dmarc_monitor_only", "message": "DMARC policy is set to p=none"})
+
     active = results.get("modules", {}).get("active", {})
     open_ports = [item.get("port") for item in active.get("ports", {}).get("ports", []) if item.get("state") == "open"]
     sensitive = sorted(set(open_ports) & SENSITIVE_PORTS)
