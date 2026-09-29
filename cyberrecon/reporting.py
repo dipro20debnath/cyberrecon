@@ -29,20 +29,130 @@ def _flatten(value: Any, prefix: str = "") -> list[tuple[str, str, str]]:
     return rows
 
 
+def _badge(value: Any) -> str:
+    text = str(value or "unknown").lower()
+    css = text if text in {"low", "medium", "high", "critical", "info"} else "neutral"
+    return f'<span class="badge {css}">{escape(str(value or "unknown").upper())}</span>'
+
+
+def _metric(label: str, value: Any, tone: str = "") -> str:
+    return f'<div class="metric {escape(tone)}"><div class="metric-label">{escape(label)}</div><div class="metric-value">{escape(str(value))}</div></div>'
+
+
+def _table(headers: list[str], rows: list[list[Any]], empty: str = "No data") -> str:
+    if not rows:
+        return f'<p class="muted">{escape(empty)}</p>'
+    head = "".join(f"<th>{escape(str(item))}</th>" for item in headers)
+    body = "".join("<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>" for row in rows)
+    return f"<div class=table-wrap><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
+
+
+def _module_section(title: str, content: str, anchor: str) -> str:
+    return f'<section id="{escape(anchor)}"><h2>{escape(title)}</h2>{content}</section>'
+
+
+def _render_dns(module: dict[str, Any]) -> str:
+    rows: list[list[Any]] = []
+    for record_type, records in module.get("records", {}).items():
+        for record in records if isinstance(records, list) else []:
+            if isinstance(record, dict):
+                rows.append([escape(record_type), escape(str(record.get("value", ""))), escape(str(record.get("ttl", "")))])
+            else:
+                rows.append([escape(record_type), escape(str(record)), ""])
+    errors = module.get("errors", [])
+    error_html = f'<div class="callout warning">{escape("; ".join(map(str, errors)))}</div>' if errors else ""
+    return error_html + _table(["Type", "Value", "TTL"], rows, "No DNS records returned")
+
+
+def _render_whois(module: dict[str, Any]) -> str:
+    data = module.get("data", {})
+    fields = ("registrar", "creation_date", "expiration_date", "updated_date", "name_servers", "country", "domain_age_days")
+    rows = [[escape(field.replace("_", " ").title()), escape(str(data[field]))] for field in fields if field in data]
+    if module.get("error"):
+        rows.append(["Error", escape(str(module["error"]))])
+    return _table(["Field", "Value"], rows, "No WHOIS data returned")
+
+
+def _render_subdomains(module: dict[str, Any]) -> str:
+    domains = module.get("subdomains", [])
+    count = module.get("count", len(domains) if isinstance(domains, list) else 0)
+    items = "".join(f"<li>{escape(str(item))}</li>" for item in (domains[:100] if isinstance(domains, list) else []))
+    more = f'<p class="muted">Showing first 100 of {escape(str(count))}.</p>' if count > 100 else ""
+    return f'<div class="subdomain-count">{escape(str(count))} discovered</div><ul class="domain-list">{items or "<li class=muted>None discovered</li>"}</ul>{more}'
+
+
+def _render_technology(module: dict[str, Any]) -> str:
+    technologies = module.get("technologies", [])
+    tech_html = " ".join(f'<span class="tag">{escape(str(item))}</span>' for item in technologies) or '<span class="muted">No technologies detected</span>'
+    security = module.get("security", {})
+    findings = security.get("findings", []) if isinstance(security, dict) else []
+    finding_rows = [[_badge(item.get("severity")), escape(str(item.get("header", ""))), escape(str(item.get("message", "")))] for item in findings]
+    return f'<div class="tag-list">{tech_html}</div><p>HTTP status: <strong>{escape(str(module.get("status_code", "unknown")))}</strong> | URL: <code>{escape(str(module.get("final_url") or module.get("url") or "unknown"))}</code></p><h3>Security findings</h3>{_table(["Severity", "Header", "Finding"], finding_rows, "No header findings")}'
+
+
+def _render_tls(module: dict[str, Any]) -> str:
+    certificate = module.get("certificate", {})
+    rows = []
+    for key in ("subject", "issuer", "not_before", "not_after", "days_until_expiry", "san"):
+        if key in certificate:
+            rows.append([escape(key.replace("_", " ").title()), escape(str(certificate[key]))])
+    status = "Reachable" if module.get("reachable") else f'Unavailable: {module.get("error", "unknown error")}'
+    return f'<p>Protocol: <strong>{escape(str(module.get("tls_version") or "unknown"))}</strong> | Cipher: <code>{escape(str(module.get("cipher") or "unknown"))}</code></p><p>Status: {_badge("info" if module.get("reachable") else "high")} {escape(status)}</p>{_table(["Certificate field", "Value"], rows, "No certificate details")}'
+
+
+def _render_active(module: dict[str, Any]) -> str:
+    ports = module.get("ports", {}).get("ports", []) if isinstance(module.get("ports"), dict) else []
+    rows = [[escape(str(item.get("port"))), escape(str(item.get("service", "unknown"))), _badge("open" if item.get("state") == "open" else item.get("state"))] for item in ports if isinstance(item, dict)]
+    open_count = module.get("ports", {}).get("open_count", 0) if isinstance(module.get("ports"), dict) else 0
+    return f'<div class="callout info">{escape(str(open_count))} open ports found</div>{_table(["Port", "Service", "State"], rows, "No port data")}'
+
+
 def _write_html(path: Path, results: dict[str, Any]) -> None:
     safe = to_jsonable(results)
-    sections = []
-    for name, value in safe.items():
-        rendered = escape(json.dumps(value, indent=2, ensure_ascii=False, default=str))
-        sections.append(f"<section><h2>{escape(str(name))}</h2><pre>{rendered}</pre></section>")
-    title = escape(str(safe.get("target", "CyberRecon report")))
+    target = str(safe.get("target", "Unknown target"))
+    risk = safe.get("risk", {}) if isinstance(safe.get("risk"), dict) else {}
+    modules = safe.get("modules", {}) if isinstance(safe.get("modules"), dict) else {}
+    errors = safe.get("errors", [])
+    score = risk.get("score", 0)
+    severity = risk.get("severity", "low")
+    cards = "".join([
+        _metric("Target", target),
+        _metric("Mode", safe.get("mode", "passive")),
+        _metric("Risk score", f"{score}/100", str(severity)),
+        _metric("Risk level", str(severity).upper(), str(severity)),
+        _metric("Errors", len(errors), "high" if errors else "low"),
+    ])
+    sections = [f'<section class="hero"><div><p class="eyebrow">CYBERRECON PRO REPORT</p><h1>{escape(target)}</h1><p class="muted">Generated {escape(str(safe.get("completed_at", safe.get("started_at", ""))))}</p></div><div class="risk-ring {escape(str(severity))}"><strong>{escape(str(score))}</strong><span>/100</span></div></section>', f'<div class="metrics">{cards}</div>']
+
+    if risk.get("indicators"):
+        rows = [[_badge(item.get("severity")), escape(str(item.get("name", ""))), escape(str(item.get("message", item.get("ports", item.get("count", "")))))] for item in risk["indicators"]]
+        sections.append(_module_section("Important findings", _table(["Severity", "Indicator", "Details"], rows), "findings"))
+    if errors:
+        sections.append(_module_section("Scan errors", '<div class="callout danger">' + "<br>".join(escape(str(item)) for item in errors) + "</div>", "errors"))
+    if "dns" in modules:
+        sections.append(_module_section("DNS records", _render_dns(modules["dns"]), "dns"))
+    if "whois" in modules:
+        sections.append(_module_section("WHOIS intelligence", _render_whois(modules["whois"]), "whois"))
+    if "subdomains" in modules:
+        sections.append(_module_section("Certificate Transparency subdomains", _render_subdomains(modules["subdomains"]), "subdomains"))
+    if "technology" in modules:
+        sections.append(_module_section("Technology and HTTP security", _render_technology(modules["technology"]), "technology"))
+    if "tls" in modules:
+        sections.append(_module_section("TLS certificate", _render_tls(modules["tls"]), "tls"))
+    if "active" in modules:
+        sections.append(_module_section("Active reconnaissance", _render_active(modules["active"]), "active"))
+
+    raw = escape(json.dumps(safe, indent=2, ensure_ascii=False, default=str))
+    sections.append(f'<section><details><summary>Raw JSON data</summary><pre>{raw}</pre></details></section>')
+    title = escape(target)
     html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CyberRecon - {title}</title>
-<style>body{{font:15px system-ui,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#17202a;background:#f6f8fa}}
-section{{background:#fff;border:1px solid #d0d7de;border-radius:8px;margin:1rem 0;padding:1rem}}
-pre{{white-space:pre-wrap;overflow:auto;background:#f6f8fa;padding:1rem;border-radius:6px}}</style></head>
-<body><h1>CyberRecon report</h1><p>Target: <strong>{title}</strong></p>{''.join(sections)}</body></html>"""
+<style>
+:root{{--bg:#f3f6fb;--card:#fff;--ink:#152238;--muted:#64748b;--line:#dbe3ef;--blue:#2563eb;--green:#15803d;--yellow:#b45309;--red:#b91c1c;--purple:#7c3aed}}
+*{{box-sizing:border-box}} body{{font:15px Inter,ui-sans-serif,system-ui,sans-serif;max-width:1280px;margin:0 auto;padding:28px;color:var(--ink);background:var(--bg)}}
+h1{{margin:0;font-size:clamp(1.7rem,4vw,2.8rem);word-break:break-word}} h2{{margin-top:0;font-size:1.15rem}} h3{{font-size:1rem;margin-bottom:.6rem}} section,.metric{{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 4px 18px #1e293b0b}} section{{margin:16px 0;padding:20px}} .hero{{display:flex;justify-content:space-between;gap:20px;align-items:center;background:linear-gradient(135deg,#172554,#2563eb);color:#fff;border:0}} .hero .muted{{color:#dbeafe}} .eyebrow{{font-size:.75rem;letter-spacing:.14em;opacity:.8}} .metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}} .metric{{padding:15px}} .metric-label{{color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}} .metric-value{{font-size:1.15rem;font-weight:700;margin-top:6px;word-break:break-word}} .metric.high .metric-value,.metric.critical .metric-value{{color:var(--red)}} .metric.medium .metric-value{{color:var(--yellow)}} .metric.low .metric-value{{color:var(--green)}} .risk-ring{{min-width:118px;height:118px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#ffffff22;border:7px solid #ffffff66}} .risk-ring strong{{font-size:2rem}} .risk-ring span{{font-size:.8rem}} .risk-ring.critical,.risk-ring.high{{border-color:#fecaca}} .risk-ring.medium{{border-color:#fde68a}} .risk-ring.low{{border-color:#bbf7d0}} .badge{{display:inline-block;border-radius:999px;padding:3px 8px;font-size:.7rem;font-weight:800;letter-spacing:.04em;background:#e2e8f0;color:#334155}} .badge.low{{background:#dcfce7;color:#166534}} .badge.medium{{background:#fef3c7;color:#92400e}} .badge.high,.badge.critical{{background:#fee2e2;color:#991b1b}} .badge.info{{background:#dbeafe;color:#1d4ed8}} .callout{{padding:12px 14px;border-radius:10px;margin:8px 0}} .callout.info{{background:#eff6ff;color:#1e40af}} .callout.warning{{background:#fffbeb;color:#92400e}} .callout.danger{{background:#fef2f2;color:#991b1b}} .muted{{color:var(--muted)}} .table-wrap{{overflow-x:auto}} table{{width:100%;border-collapse:collapse}} th,td{{padding:10px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}} th{{color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.04em}} code,pre{{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}} code{{word-break:break-all}} pre{{white-space:pre-wrap;overflow:auto;background:#f8fafc;padding:14px;border-radius:10px;max-height:550px}} .tag-list{{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0}} .tag{{padding:6px 10px;border-radius:8px;background:#ede9fe;color:#5b21b6;font-weight:600}} .subdomain-count{{font-size:1.6rem;font-weight:800;color:var(--blue)}} .domain-list{{columns:3;column-gap:25px;line-height:1.8;padding-left:20px}} details summary{{cursor:pointer;font-weight:700}} @media(max-width:700px){{body{{padding:14px}}.hero{{align-items:flex-start;flex-direction:column}}.domain-list{{columns:1}}}}
+</style></head><body>{''.join(sections)}</body></html>"""
     path.write_text(html, encoding="utf-8")
 
 

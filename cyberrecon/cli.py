@@ -9,6 +9,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 
 from cyberrecon.config import Config, ConfigError, config
@@ -58,7 +59,25 @@ def scan(
         console.print("[red]Scan failed:[/red] Output format must be json, csv or html")
         raise typer.Exit(code=2)
     try:
-        results = ReconScanner(config).scan(target, mode=mode, confirm_active=confirm_active)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("Preparing scan", total=1)
+
+            def update_progress(completed: int, total: int, label: str) -> None:
+                progress.update(task_id, total=total, completed=completed, description=label)
+
+            results = ReconScanner(config).scan(
+                target,
+                mode=mode,
+                confirm_active=confirm_active,
+                progress_callback=update_progress,
+            )
         path = write_report(results, config.output_dir, target, output)
     except (ScanError, ReportError, ConfigError, PermissionError, OSError) as exc:
         console.print(f"[red]Scan failed:[/red] {exc}")

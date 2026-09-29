@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, Optional
 
 from cyberrecon.config import Config
 from cyberrecon.integrations import ExternalIntelligence
@@ -19,11 +19,20 @@ class ScanError(ValueError):
     """Raised when a scan request cannot be executed."""
 
 
+ProgressCallback = Callable[[int, int, str], None]
+
+
 class ReconScanner:
     def __init__(self, config: Config):
         self.config = config
 
-    def scan(self, target: str, mode: str = "passive", confirm_active: bool = False) -> dict[str, Any]:
+    def scan(
+        self,
+        target: str,
+        mode: str = "passive",
+        confirm_active: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> dict[str, Any]:
         mode = mode.lower().strip()
         if mode not in {"passive", "active", "full"}:
             raise ScanError("Mode must be passive, active or full")
@@ -35,9 +44,14 @@ class ReconScanner:
         if mode in {"active", "full"}:
             require_active_authorization(info, self.config, confirm_active)
 
+        stage_names = self._stage_names(info, mode)
+        total_stages = len(stage_names)
+        completed_stages = 0
+        self._emit_progress(progress_callback, completed_stages, total_stages, "Initializing scan")
+
         results: dict[str, Any] = {
             "tool": "CyberRecon Pro",
-            "version": "1.1.0",
+            "version": "1.2.0",
             "target": info.value,
             "target_type": info.kind,
             "mode": mode,
@@ -67,27 +81,71 @@ class ReconScanner:
                 except Exception as exc:
                     results["modules"][name] = {"error": str(exc)}
                     results["errors"].append(f"{name}: {exc}")
+                completed_stages += 1
+                self._emit_progress(progress_callback, completed_stages, total_stages, f"{name.replace('_', ' ').title()} complete")
 
         if mode in {"active", "full"}:
-            results["modules"]["active"] = self._run_active(info.value)
+            active, completed_stages = self._run_active(
+                info.value,
+                progress_callback=progress_callback,
+                completed=completed_stages,
+                total=total_stages,
+            )
+            results["modules"]["active"] = active
 
         results["risk"] = assess(results)
+        completed_stages += 1
+        self._emit_progress(progress_callback, completed_stages, total_stages, "Risk assessment complete")
         results["completed_at"] = datetime.now(timezone.utc).isoformat()
         return to_jsonable(results)
 
-    def _run_active(self, target: str) -> dict[str, Any]:
+    def _stage_names(self, info: Any, mode: str) -> list[str]:
+        names = ["dns", "whois", "subdomains", "ip_intelligence", "technology", "tls", "external_intelligence"]
+        if info.is_ip:
+            names.remove("subdomains")
+        if mode in {"active", "full"}:
+            names.append("active.ports")
+            if info.is_domain:
+                names.append("active.subdomains")
+                if self.config.get("active.check_zone_transfer", False):
+                    names.append("active.zone_transfer")
+                if self.config.get("output.screenshots", False):
+                    names.append("active.screenshot")
+        names.append("risk")
+        return names
+
+    @staticmethod
+    def _emit_progress(callback: Optional[ProgressCallback], completed: int, total: int, label: str) -> None:
+        if callback:
+            callback(completed, total, label)
+
+    def _run_active(
+        self,
+        target: str,
+        progress_callback: Optional[ProgressCallback] = None,
+        completed: int = 0,
+        total: int = 1,
+    ) -> tuple[dict[str, Any], int]:
         active: dict[str, Any] = {}
         target_info = normalize_target(target)
         ports = self.config.get("active.ports", [])
         active["ports"] = PortScanner(self.config.timeout, self.config.threads).scan(target, ports)
+        completed += 1
+        self._emit_progress(progress_callback, completed, total, "Active port scan complete")
         if target_info.is_domain:
             wordlist = self.config.get("wordlists.subdomains", "wordlists/subdomains.txt")
             path = self.config.config_path.parent / str(wordlist)
             active["subdomains"] = SubdomainBruteForcer(self.config.timeout, self.config.threads).discover(target, path)
+            completed += 1
+            self._emit_progress(progress_callback, completed, total, "Active subdomain discovery complete")
             if self.config.get("active.check_zone_transfer", False):
                 active["zone_transfer"] = DNSEnumerator(self.config.timeout).check_zone_transfer(target)
+                completed += 1
+                self._emit_progress(progress_callback, completed, total, "Zone transfer check complete")
         if self.config.get("output.screenshots", False) and normalize_target(target).is_domain:
             from cyberrecon.modules.screenshot import ScreenshotCapture
             screenshot_path = self.config.output_dir / "screenshots" / f"{target}.png"
             active["screenshot"] = ScreenshotCapture(int(self.config.timeout * 1000)).capture(target, screenshot_path)
-        return active
+            completed += 1
+            self._emit_progress(progress_callback, completed, total, "Screenshot capture complete")
+        return active, completed
