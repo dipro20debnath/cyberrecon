@@ -18,7 +18,18 @@ It collects public intelligence, highlights important findings, tracks changes o
 - Produce JSON, CSV, HTML, PDF, Markdown, and SARIF reports.
 - Compare scans, highlight changes, filter findings by severity, monitor targets, and enforce CI quality gates.
 
-## Quick start
+## Complete setup and first scan
+
+Follow the steps below from start to finish. You need Python 3.10-3.13, Git, and an internet connection for installation and public-data lookups.
+
+### 1. Download the repository
+
+```bash
+git clone https://github.com/dipro20debnath/cyberrecon.git
+cd cyberrecon
+```
+
+If you already downloaded the repository, open a terminal in its folder and skip this step.
 
 ### Windows PowerShell
 
@@ -41,15 +52,74 @@ Run a first passive scan. No API key is required for the core passive modules:
 
 Open the generated file in `reports/`.
 
-### macOS/Linux
+### Linux
 
 ```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip git
+
 python3 -m venv .venv
 . .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python -m cyberrecon init
 python -m cyberrecon doctor
+```
+
+### macOS
+
+Install Python and Git with [Homebrew](https://brew.sh/) if they are not already installed:
+
+```bash
+brew install python git
+```
+
+Then create the environment and install CyberRecon Pro:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m cyberrecon init
+python -m cyberrecon doctor
+```
+
+### 2. Run the first passive scan
+
+Passive scanning is the recommended starting point. It does not require API keys:
+
+```bash
 python -m cyberrecon scan example.com --mode passive --output html
+```
+
+The tool displays live progress and saves the report inside `reports/`. Replace `example.com` with a domain or IP address you own or are authorized to assess.
+
+## Recommended user workflow
+
+1. Run `doctor` to check the local installation.
+2. Run a passive scan and review the HTML report.
+3. Add optional API keys if you need provider enrichment.
+4. Save a JSON scan as a baseline for future comparisons.
+5. Use `watch` for recurring monitoring and `history` for trends.
+6. Enable active checks only after configuring an authorized target allowlist.
+
+This workflow keeps the default experience safe, repeatable, and easy to automate.
+
+### 3. Open and understand the report
+
+The HTML report is designed for people. JSON and SARIF are better for automation. Available formats are `json`, `csv`, `html`, `pdf`, `md`, `markdown`, and `sarif`.
+
+```bash
+python -m cyberrecon scan example.com --output json
+python -m cyberrecon scan example.com --output pdf
+python -m cyberrecon scan example.com --output sarif
+```
+
+List the exact report filenames before using them in another command:
+
+```bash
+python -m cyberrecon reports
 ```
 
 ## The main commands
@@ -138,6 +208,16 @@ $env:CR_CENSYS_API_KEY = "YOUR_KEY"
 $env:CR_IPINFO_API_KEY = "YOUR_KEY"
 ```
 
+For Linux and macOS shells:
+
+```bash
+export CR_VIRUSTOTAL_API_KEY="YOUR_KEY"
+export CR_URLSCAN_API_KEY="YOUR_KEY"
+export CR_SHODAN_API_KEY="YOUR_KEY"
+export CR_CENSYS_API_KEY="YOUR_KEY"
+export CR_IPINFO_API_KEY="YOUR_KEY"
+```
+
 Validate configured providers without printing keys or response bodies:
 
 ```powershell
@@ -206,7 +286,7 @@ python -m cyberrecon watch example.com --iterations 3 --fail-on-change
 
 The process exits with code `1` when a selected policy is violated and `2` when a policy option is invalid.
 
-The repository CI workflow tests Python 3.10–3.13 on Ubuntu and Windows. The security workflow runs CodeQL, dependency auditing, and pull-request dependency review.
+The repository CI workflow tests Python 3.10-3.13 on Ubuntu and Windows. The security workflow runs CodeQL, dependency auditing, and pull-request dependency review.
 
 ## Active checks
 
@@ -260,7 +340,7 @@ python -m cyberrecon reports
 
 Then pass two existing JSON report paths to `compare`.
 
-### Shodan/Censys show “skipped”
+### Shodan/Censys show `skipped`
 
 This is expected when the validation target is a domain. Run `doctor --live-apis` with an authorized IP target for those providers.
 
@@ -272,15 +352,15 @@ Warnings are not necessarily code errors. They may mean that a provider key is n
 
 ```text
 cyberrecon/
-├── modules/passive/       Passive intelligence modules
-├── modules/active.py      Guarded active checks
-├── data/                  Bundled default assets for clean installs
-├── integrations.py        Optional external providers
-├── scanner.py             Scan orchestration and progress
-├── reporting.py           JSON/CSV/HTML/PDF/Markdown/SARIF reports
-├── diffing.py             Baseline and change detection
-├── policy.py              CI quality gates
-└── doctor.py              Readiness diagnostics
+|-- modules/passive/       Passive intelligence modules
+|-- modules/active.py      Guarded active checks
+|-- data/                  Bundled default assets for clean installs
+|-- integrations.py        Optional external providers
+|-- scanner.py             Scan orchestration and progress
+|-- reporting.py           JSON/CSV/HTML/PDF/Markdown/SARIF reports
+|-- diffing.py             Baseline and change detection
+|-- policy.py              CI quality gates
+`-- doctor.py              Readiness diagnostics
 tests/                     Offline regression tests
 wordlists/                 Local active-scan wordlists
 ```
