@@ -1,174 +1,298 @@
 # CyberRecon Pro
 
-Passive-first reconnaissance toolkit for assets you own or are authorized to assess.
+[![CI](https://github.com/dipro20debnath/cyberrecon/actions/workflows/ci.yml/badge.svg)](https://github.com/dipro20debnath/cyberrecon/actions/workflows/ci.yml)
+[![Security](https://github.com/dipro20debnath/cyberrecon/actions/workflows/security.yml/badge.svg)](https://github.com/dipro20debnath/cyberrecon/actions/workflows/security.yml)
+
+CyberRecon Pro is a passive-first reconnaissance and security-posture toolkit for domains and IP addresses that you own or are explicitly authorized to assess.
+
+It collects public intelligence, highlights important findings, tracks changes over time, and produces reports that work for both people and CI pipelines.
+
+> Use this tool only on assets you own or have written permission to test. Active checks are guarded and do not perform exploitation, credential attacks, or banner grabbing.
+
+## What can it do?
+
+- Discover DNS, WHOIS, certificate, subdomain, technology, TLS, and HTTP-security information.
+- Query optional read-only intelligence providers such as VirusTotal, URLScan, Shodan, Censys, IPinfo, and SecurityTrails.
+- Run guarded active checks: bounded TCP port checks, DNS wordlist discovery, zone-transfer posture checks, and optional screenshots.
+- Show live scan progress and record per-module timing and errors.
+- Produce JSON, CSV, HTML, PDF, Markdown, and SARIF reports.
+- Compare scans, highlight changes, filter findings by severity, monitor targets, and enforce CI quality gates.
 
 ## Quick start
 
+### Windows PowerShell
+
+Run these commands from the repository directory:
+
 ```powershell
-python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m cyberrecon init
+.\.venv\Scripts\python.exe -m cyberrecon doctor
+# Optional: activate the environment so the remaining examples can use `python`.
+.\.venv\Scripts\Activate.ps1
+```
+
+Run a first passive scan. No API key is required for the core passive modules:
+
+```powershell
+.\.venv\Scripts\python.exe -m cyberrecon scan example.com --mode passive --output html
+```
+
+Open the generated file in `reports/`.
+
+### macOS/Linux
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 python -m cyberrecon init
-python -m cyberrecon scan example.com --output json
+python -m cyberrecon doctor
+python -m cyberrecon scan example.com --mode passive --output html
 ```
 
-Use `--output csv`, `--output html` or `--output pdf` for the other report formats. API keys can
-be set with environment variables such as `CR_VIRUSTOTAL_API_KEY` or with
-`python -m cyberrecon config-set api_keys.virustotal YOUR_KEY`.
+## The main commands
 
-Providers may use a YAML key list for rotation, or a comma-separated
-`CR_<PROVIDER>_API_KEYS` environment variable:
+| Command | Purpose |
+| --- | --- |
+| `scan` | Run one reconnaissance scan and save a report. |
+| `watch` | Repeat scans and compare each run with the previous one. |
+| `compare` | Compare two JSON reports. |
+| `filter` | Create a focused report containing findings at or above a severity. |
+| `reports` | List available JSON reports and their exact filenames. |
+| `history` | Show risk, runtime, change, and error trends. |
+| `doctor` | Check dependencies, configuration, wordlists, reports, and optional API readiness. |
+| `config-show` | Show effective configuration with secrets redacted. |
+| `config-set` | Update a configuration value. |
+| `init` | Create or repair the configuration, directories, and default wordlists. |
 
-```yaml
-api_keys:
-  virustotal:
-    - first-key
-    - second-key
-```
-
-Targets are assigned deterministically to a key slot. If a provider returns
-401, 403 or 429/rate-limit errors, the next configured key is attempted. Only
-non-secret rotation metadata is stored in reports.
-
-For documentation or CI ingestion, use Markdown or SARIF output:
+Every command has built-in help:
 
 ```powershell
+.\.venv\Scripts\python.exe -m cyberrecon --help
+.\.venv\Scripts\python.exe -m cyberrecon scan --help
+```
+
+## Scanning options
+
+### Select modules
+
+Run only the modules you need:
+
+```powershell
+python -m cyberrecon scan example.com `
+  --only dns,tls,technology `
+  --output html
+```
+
+Skip an optional module:
+
+```powershell
+python -m cyberrecon scan example.com `
+  --skip external_intelligence `
+  --output json
+```
+
+Available passive modules are:
+
+`dns`, `whois`, `subdomains`, `ip_intelligence`, `technology`, `tls`, and `external_intelligence`.
+
+### Report formats
+
+Use `--output` with one of these formats:
+
+`json`, `csv`, `html`, `pdf`, `md`, `markdown`, or `sarif`.
+
+Examples:
+
+```powershell
+python -m cyberrecon scan example.com --output json
+python -m cyberrecon scan example.com --output pdf
 python -m cyberrecon scan example.com --output md
 python -m cyberrecon scan example.com --output sarif
-python -m cyberrecon scan example.com --output pdf
 ```
 
-SARIF 2.1.0 contains risk indicators, HTTP security findings and scan errors
-with the target attached as a location.
+SARIF reports contain risk indicators, HTTP security findings, and scan errors in a format supported by many CI and code-scanning tools.
 
-Create a focused operator report from an existing JSON scan without changing
-the source report or its full-scan risk score:
+## Optional API integrations
+
+API keys are optional. Core passive scanning works without them. Prefer environment variables so secrets do not end up in `config.yaml` or Git history.
+
+| Provider | Environment variable | Key page |
+| --- | --- | --- |
+| VirusTotal | `CR_VIRUSTOTAL_API_KEY` | [VirusTotal API key](https://www.virustotal.com/gui/my-apikey) |
+| URLScan | `CR_URLSCAN_API_KEY` | [URLScan API guide](https://docs.urlscan.io/guides/quickstart) |
+| SecurityTrails | `CR_SECURITYTRAILS_API_KEY` | [SecurityTrails credentials](https://securitytrails.com/app/account/credentials) |
+| Shodan | `CR_SHODAN_API_KEY` | [Shodan API requirements](https://developer.shodan.io/api/requirements) |
+| Censys | `CR_CENSYS_API_KEY` | [Censys API setup](https://docs.censys.com/reference/get-started) |
+| IPinfo | `CR_IPINFO_API_KEY` | [IPinfo token page](https://ipinfo.io/account/token) |
+
+For a temporary PowerShell session:
 
 ```powershell
-python -m cyberrecon filter reports/example.com_scan.json --min-severity high --output html
-python -m cyberrecon filter reports/example.com_scan.json --min-severity critical --output pdf
+$env:CR_VIRUSTOTAL_API_KEY = "YOUR_KEY"
+$env:CR_URLSCAN_API_KEY = "YOUR_KEY"
+$env:CR_SHODAN_API_KEY = "YOUR_KEY"
+$env:CR_CENSYS_API_KEY = "YOUR_KEY"
+$env:CR_IPINFO_API_KEY = "YOUR_KEY"
 ```
 
-The filtered report records the threshold and included/excluded counts.
-
-CI quality gates can fail the command after writing its report:
+Validate configured providers without printing keys or response bodies:
 
 ```powershell
-python -m cyberrecon scan example.com --output sarif --fail-on high
-python -m cyberrecon compare reports/old.json reports/new.json --fail-on-change
+python -m cyberrecon doctor --live-apis --api-target your-authorized-domain.com
 ```
 
-The process exits with code `1` when the selected policy is violated and `2`
-when a policy option is invalid.
+Domain targets validate domain-oriented providers. Shodan and Censys require an authorized IP target:
 
-## Continuous integration
+```powershell
+python -m cyberrecon doctor --live-apis --api-target YOUR_AUTHORIZED_IP
+```
 
-`.github/workflows/ci.yml` runs the test suite on Python 3.10 through 3.13 for
-pushes and pull requests targeting `main`. It also compiles the source and
-builds both wheel and source distributions.
+Multiple keys can be rotated with a comma-separated variable:
 
-`.github/workflows/security.yml` runs CodeQL, `pip-audit`, and pull-request
-dependency review. Dependabot is configured to keep Python and GitHub Actions
-dependencies current.
+```powershell
+$env:CR_VIRUSTOTAL_API_KEYS = "FIRST_KEY,SECOND_KEY"
+```
 
-Each scan records a unique `run_id`, total runtime, per-stage duration and stage
-status in `telemetry`. These fields are included in JSON, Markdown, SARIF and
-HTML output for monitoring and troubleshooting.
+The tool retries transient requests, respects the configured rate limit, and records only non-secret key-slot metadata in reports. Never commit real keys.
 
-Review stored scan trends with:
+## Baselines, comparisons, and monitoring
+
+Save a baseline JSON report, then compare a later scan against it:
+
+```powershell
+python -m cyberrecon scan example.com --output json
+python -m cyberrecon scan example.com `
+  --baseline reports/example.com_scan.json `
+  --output html
+python -m cyberrecon reports
+python -m cyberrecon compare reports/older.json reports/newer.json --output html
+```
+
+Create a focused report without changing the original scan or its full risk score:
+
+```powershell
+python -m cyberrecon filter reports/example.com_scan.json `
+  --min-severity high `
+  --output html
+```
+
+Run repeated passive monitoring:
+
+```powershell
+python -m cyberrecon watch example.com `
+  --iterations 3 `
+  --interval 300 `
+  --output html
+```
+
+Review stored trends:
 
 ```powershell
 python -m cyberrecon history --target example.com --limit 20
 ```
 
-The history table shows risk score/severity, runtime, baseline changes and
-module errors without opening each report manually.
+## CI quality gates
 
-Run a non-invasive preflight check before deployment or scanning:
-
-```powershell
-python -m cyberrecon doctor
-python -m cyberrecon doctor --output json --strict
-python -m cyberrecon doctor --live-apis --api-target example.com
-```
-
-The doctor checks runtime dependencies, configuration, output/cache paths,
-optional API-key availability, active allowlisting and report inventory.
-`--live-apis` is opt-in and performs bounded read-only provider requests; it
-reports only status/attempt metadata and never prints keys or response bodies.
-
-For continuous passive monitoring, use `watch`; each run gets a unique report
-name and is compared with the previous iteration:
+Reports can be written before a command exits with a policy failure:
 
 ```powershell
-python -m cyberrecon watch example.com --iterations 3 --interval 300 --output html
+python -m cyberrecon scan example.com --output sarif --fail-on high
+python -m cyberrecon compare reports/old.json reports/new.json --fail-on-change
+python -m cyberrecon watch example.com --iterations 3 --fail-on-change
 ```
 
-Use `--fail-on-change` or `--fail-on high` to stop the watch with a non-zero
-exit code when the monitoring policy is violated.
+The process exits with code `1` when a selected policy is violated and `2` when a policy option is invalid.
 
-Run a focused scan when only a few intelligence sources need refreshing:
-
-```powershell
-python -m cyberrecon scan example.com --only dns,tls,technology --output html
-python -m cyberrecon scan example.com --skip external_intelligence --output json
-```
-
-Available passive modules are `dns`, `whois`, `subdomains`,
-`ip_intelligence`, `technology`, `tls` and `external_intelligence`. Active
-modules use names such as `active.ports` and still require active authorization.
-The risk assessment always runs as the final stage.
-
-## Baseline comparison
-
-Keep a previous JSON report and compare future scans against it. The comparison
-tracks DNS, subdomains, technologies, security findings, open ports, TLS expiry
-and risk-score changes:
-
-```powershell
-python -m cyberrecon scan example.com --output json
-python -m cyberrecon scan example.com --output html --baseline reports/example.com_scan.json
-python -m cyberrecon compare reports/older.json reports/newer.json --output html
-python -m cyberrecon reports
-```
-
-Baseline scans are written as `*_scan_with_baseline.*` so the previous report is
-not overwritten. Comparison reports are self-contained HTML dashboards or
-machine-readable JSON/CSV files.
-
-Use `reports` to see the exact JSON filenames before running `compare`; this is
-especially useful when several scans of the same target are stored together.
+The repository CI workflow tests Python 3.10–3.13 on Ubuntu and Windows. The security workflow runs CodeQL, dependency auditing, and pull-request dependency review.
 
 ## Active checks
 
-Active mode is disabled by default. To enable it, edit `config.yaml`:
+Active checks require an enabled configuration, an explicit allowlist, and the `--confirm-active` flag. New configurations use active mode disabled by default. Before using it, configure an explicit allowlist for a target you own or are authorized to assess:
 
 ```yaml
 active:
   enabled: true
   allowed_targets:
-    - example.com
+    - your-authorized-domain.com
+  allow_private_targets: false
 ```
 
-Then run:
+Then confirm authorization at runtime:
 
 ```powershell
-python -m cyberrecon scan example.com --mode full --confirm-active
+python -m cyberrecon scan your-authorized-domain.com `
+  --mode full `
+  --confirm-active `
+  --output html
 ```
 
-The active layer contains bounded DNS wordlist resolution and a configurable
-port list. It does not perform exploitation, credential testing, or banner
-grabbing. Only use it with written authorization.
+Active checks are bounded and limited to:
 
-## Architecture
+- Configured TCP ports
+- DNS wordlist resolution
+- DNS zone-transfer posture checks
+- Optional Playwright screenshots
 
-- `config.py`: validated, deep-merged YAML configuration with atomic writes
-- `modules/passive`: DNS, WHOIS, CT logs, IP intelligence, HTTP fingerprinting, favicon fingerprinting and public web metadata
-- DNS reports include DNSSEC evidence, CAA issuers and mail-domain SPF/DMARC posture analysis
-- `modules/passive`: TLS certificate inspection and HTTP security-header posture analysis
-- `integrations.py`: optional read-only VirusTotal, URLScan, SecurityTrails, Shodan and Censys lookups
-- `utils/http.py`: shared retry, rate-limit and TTL-cache policy for HTTP intelligence modules
-- `modules/active.py`: guarded wordlist DNS resolution and bounded TCP probes
-- `diffing.py`: validated baseline loading and report change detection
-- `reporting.py`: JSON, CSV, PDF, Markdown, SARIF and self-contained HTML reports with highlighted findings
-- `risk.py`: conservative heuristic indicators, not a vulnerability score
-- `tests/`: offline unit tests with network calls mocked or avoided
+They do not exploit vulnerabilities, test credentials, brute-force accounts, or grab service banners.
+
+## Troubleshooting
+
+### PowerShell cannot find Python
+
+Run the command from the repository directory and use the correct virtual-environment path:
+
+```powershell
+.\.venv\Scripts\python.exe -m cyberrecon --help
+```
+
+If your virtual environment is one directory above the repository, use `..\.venv\Scripts\python.exe` instead.
+
+### `compare` says a report is missing
+
+List the exact filenames first:
+
+```powershell
+python -m cyberrecon reports
+```
+
+Then pass two existing JSON report paths to `compare`.
+
+### Shodan/Censys show “skipped”
+
+This is expected when the validation target is a domain. Run `doctor --live-apis` with an authorized IP target for those providers.
+
+### API warnings
+
+Warnings are not necessarily code errors. They may mean that a provider key is not configured, the target type is unsupported, the provider plan does not allow the endpoint, or the request quota was reached.
+
+## Project layout
+
+```text
+cyberrecon/
+├── modules/passive/       Passive intelligence modules
+├── modules/active.py      Guarded active checks
+├── data/                  Bundled default assets for clean installs
+├── integrations.py        Optional external providers
+├── scanner.py             Scan orchestration and progress
+├── reporting.py           JSON/CSV/HTML/PDF/Markdown/SARIF reports
+├── diffing.py             Baseline and change detection
+├── policy.py              CI quality gates
+└── doctor.py              Readiness diagnostics
+tests/                     Offline regression tests
+wordlists/                 Local active-scan wordlists
+```
+
+## Development
+
+Install development dependencies and run the test suite:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pytest
+python -m compileall -q cyberrecon tests
+```
+
+The tests are designed to run offline; external provider requests are mocked or avoided.
