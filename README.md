@@ -24,6 +24,22 @@ Follow the steps below from start to finish. You need Python 3.10-3.13, Git, and
 
 ### 1. Download the repository
 
+#### Windows PowerShell
+
+```powershell
+git clone https://github.com/dipro20debnath/cyberrecon.git
+Set-Location cyberrecon
+```
+
+#### Linux
+
+```bash
+git clone https://github.com/dipro20debnath/cyberrecon.git
+cd cyberrecon
+```
+
+#### macOS
+
 ```bash
 git clone https://github.com/dipro20debnath/cyberrecon.git
 cd cyberrecon
