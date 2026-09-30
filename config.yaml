@@ -21,8 +21,9 @@ output:
   save_directory: reports
   screenshots: false
 active:
-  enabled: false
-  allowed_targets: []
+  enabled: true
+  allowed_targets:
+  - authorized.example.com
   allow_private_targets: false
   check_zone_transfer: false
   ports:
