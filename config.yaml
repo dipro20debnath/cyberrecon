@@ -15,7 +15,7 @@ settings:
   rate_limit: 1.0
   max_retries: 2
   cache_ttl: 3600
-  user_agent: CyberRecon-Pro/1.0
+  user_agent: CyberRecon-Pro/1.16.1
 output:
   default_format: json
   save_directory: reports

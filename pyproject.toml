@@ -28,3 +28,6 @@ addopts = "-q"
 
 [tool.setuptools.packages.find]
 include = ["cyberrecon*"]
+
+[tool.setuptools.package-data]
+cyberrecon = ["data/*.txt"]

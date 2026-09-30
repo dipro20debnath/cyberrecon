@@ -1,5 +1,7 @@
 import json
 
+import yaml
+
 from typer.testing import CliRunner
 
 import cyberrecon.cli as cli_module
@@ -26,3 +28,13 @@ def test_scan_supports_fail_on_change(monkeypatch, tmp_path):
     ])
     assert result.exit_code == 1
     assert "Quality gate failed" in result.stdout
+
+
+def test_init_seeds_default_wordlists_for_clean_install(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    result = CliRunner().invoke(app, ["--config", str(config_path), "init"])
+
+    assert result.exit_code == 0, result.stdout
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    for relative_path in config["wordlists"].values():
+        assert (tmp_path / relative_path).is_file(), relative_path

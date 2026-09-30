@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from importlib.resources import files as resource_files
 from pathlib import Path
 from time import sleep
 
@@ -31,6 +32,11 @@ app = typer.Typer(
 )
 console = Console()
 SUPPORTED_OUTPUTS = {"json", "csv", "html", "pdf", "md", "markdown", "sarif"}
+DEFAULT_WORDLIST_ASSETS = {
+    "wordlists/subdomains.txt": "subdomains.txt",
+    "wordlists/dns-names.txt": "dns-names.txt",
+    "wordlists/top-ports.txt": "top-ports.txt",
+}
 
 
 def print_banner() -> None:
@@ -430,6 +436,14 @@ def init() -> None:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     for relative in ("wordlists", "tests"):
         (config.config_path.parent / relative).mkdir(parents=True, exist_ok=True)
+    assets = resource_files("cyberrecon.data")
+    for relative_path, asset_name in DEFAULT_WORDLIST_ASSETS.items():
+        destination = config.config_path.parent / relative_path
+        if not destination.exists():
+            destination.write_text(
+                assets.joinpath(asset_name).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
     console.print(f"Initialized configuration at {config.config_path}")
     console.print(f"Reports directory: {config.output_dir}")
 

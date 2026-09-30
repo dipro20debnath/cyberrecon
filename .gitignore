@@ -3,6 +3,8 @@ __pycache__/
 .pytest_cache/
 .cache/
 .venv/
+build/
+dist/
 reports/*
 !reports/.gitkeep
 *.egg-info/
