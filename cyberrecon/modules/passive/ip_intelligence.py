@@ -10,12 +10,13 @@ from typing import Any, Iterable, Optional
 
 import requests
 
+from cyberrecon import DEFAULT_USER_AGENT
 from cyberrecon.utils.http import JsonFileCache, JsonHttpClient
 from cyberrecon.utils.validators import TargetValidationError, normalize_target
 
 
 class IPIntelligence:
-    def __init__(self, token: Optional[str | list[str]] = None, timeout: float = 10, session: Optional[requests.Session] = None, retries: int = 2, rate_limit: float = 0.0, cache: Optional[JsonFileCache] = None, user_agent: str = "CyberRecon-Pro/1.0"):
+    def __init__(self, token: Optional[str | list[str]] = None, timeout: float = 10, session: Optional[requests.Session] = None, retries: int = 2, rate_limit: float = 0.0, cache: Optional[JsonFileCache] = None, user_agent: str = DEFAULT_USER_AGENT):
         if isinstance(token, list):
             self.tokens = self._normalize_tokens(token)
         else:

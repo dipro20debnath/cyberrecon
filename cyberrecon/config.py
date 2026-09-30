@@ -14,6 +14,8 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from cyberrecon import DEFAULT_USER_AGENT
+
 
 class ConfigError(ValueError):
     """Raised when a configuration file cannot be loaded or written."""
@@ -42,7 +44,7 @@ class Config:
             "rate_limit": 1.0,
             "max_retries": 2,
             "cache_ttl": 3600,
-            "user_agent": "CyberRecon-Pro/1.0",
+            "user_agent": DEFAULT_USER_AGENT,
         },
         "output": {
             "default_format": "json",
@@ -150,16 +152,18 @@ class Config:
             if not isinstance(child, dict):
                 raise ConfigError(f"Cannot nest configuration key below '{part}'")
             current = child
-        current[parts[-1]] = self._coerce_value(value)
+        current[parts[-1]] = self._coerce_value(value, key_path=".".join(parts))
         self.save()
 
     @staticmethod
-    def _coerce_value(value: Any) -> Any:
+    def _coerce_value(value: Any, key_path: str = "") -> Any:
         if not isinstance(value, str):
             return value
         try:
             parsed = yaml.safe_load(value)
         except yaml.YAMLError:
+            return value
+        if key_path.startswith("api_keys.") and isinstance(parsed, (bool, int, float)):
             return value
         return value if parsed is None else parsed
 
@@ -229,7 +233,7 @@ class Config:
 
     @property
     def user_agent(self) -> str:
-        return str(self.get("settings.user_agent", "CyberRecon-Pro/1.0"))
+        return str(self.get("settings.user_agent", DEFAULT_USER_AGENT))
 
     @property
     def output_dir(self) -> Path:
@@ -252,5 +256,11 @@ class Config:
         return bool(self.get("active.allow_private_targets", False))
 
 
-# Keep a convenient import for the CLI while avoiding writes at import time.
-config = Config()
+# Keep a convenient import for the CLI while allowing --help/imports to work
+# even when an unrelated working-directory config.yaml is malformed.
+try:
+    config = Config()
+except ConfigError:
+    config = Config.__new__(Config)
+    config.config_path = Path("config.yaml")
+    config.config = Config.defaults()

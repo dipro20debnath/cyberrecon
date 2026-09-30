@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import requests
 
+from cyberrecon import DEFAULT_USER_AGENT
 from cyberrecon.modules.passive.security import SecurityHeadersAuditor
 from cyberrecon.utils.http import JsonFileCache, JsonHttpClient
 from cyberrecon.utils.validators import TargetValidationError, normalize_target
@@ -25,7 +26,7 @@ class TechnologyDetector:
         "jQuery": ("jquery.min.js", "jquery.js"),
     }
 
-    def __init__(self, timeout: float = 10, session: Optional[requests.Session] = None, user_agent: str = "CyberRecon-Pro/1.0", retries: int = 2, rate_limit: float = 0.0, cache: Optional[JsonFileCache] = None):
+    def __init__(self, timeout: float = 10, session: Optional[requests.Session] = None, user_agent: str = DEFAULT_USER_AGENT, retries: int = 2, rate_limit: float = 0.0, cache: Optional[JsonFileCache] = None):
         self.timeout = max(0.5, float(timeout))
         self.session = session or requests.Session()
         self.client = JsonHttpClient(timeout=self.timeout, retries=retries, rate_limit=rate_limit, user_agent=user_agent, cache=cache, session=self.session)

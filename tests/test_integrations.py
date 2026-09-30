@@ -3,7 +3,7 @@ import json
 import requests
 
 from cyberrecon.config import Config
-from cyberrecon.integrations import ExternalIntelligence
+from cyberrecon.integrations import ExternalIntelligence, _looks_like_ip
 from cyberrecon.modules.passive.ip_intelligence import IPIntelligence
 
 
@@ -37,6 +37,13 @@ def test_external_intelligence_key_order_is_deterministic():
     second = ExternalIntelligence._key_order("virustotal", "example.com", 3)
     assert first == second
     assert sorted(first) == [0, 1, 2]
+
+
+def test_ip_detection_rejects_non_ip_numeric_strings():
+    assert _looks_like_ip("192.0.2.10") is True
+    assert _looks_like_ip("2001:db8::10") is True
+    assert _looks_like_ip("1.0") is False
+    assert _looks_like_ip("20260930") is False
 
 
 def test_ip_intelligence_rotates_tokens_on_auth_failure():

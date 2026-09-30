@@ -7,6 +7,7 @@ result instead of an exception, so the core scanner remains useful offline.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from typing import Any, Optional
 
@@ -152,7 +153,11 @@ class ExternalIntelligence:
 
 
 def _looks_like_ip(value: str) -> bool:
-    return ":" in value or all(part.isdigit() for part in value.split("."))
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 def _extract_data(payload: Any) -> Any:

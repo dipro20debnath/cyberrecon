@@ -1,5 +1,6 @@
 import requests
 
+import cyberrecon.utils.http as http_module
 from cyberrecon.utils.http import JsonFileCache, JsonHttpClient
 
 
@@ -83,3 +84,33 @@ def test_json_http_client_caches_binary_content(tmp_path):
     assert client.get_bytes("https://example.test/favicon.ico", cache_key="favicon-key")["content"] == b"\x00\x01\x02favicon"
     assert client.get_bytes("https://example.test/favicon.ico", cache_key="favicon-key")["content"] == b"\x00\x01\x02favicon"
     assert session.calls == 1
+
+
+def test_cache_concurrent_reads_and_writes_are_valid(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    cache = JsonFileCache(tmp_path / "cache", ttl=60)
+
+    def write_and_read(value):
+        cache.set("shared", {"value": value})
+        return cache.get("shared")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        values = list(pool.map(write_and_read, range(32)))
+    assert all(isinstance(value, dict) and isinstance(value.get("value"), int) for value in values)
+
+
+def test_rate_limiter_releases_lock_before_sleep(monkeypatch):
+    limiter = http_module.RateLimiter(1.0)
+    limiter._last_request = http_module.time.monotonic()
+    checked = []
+
+    def fake_sleep(delay):
+        acquired = limiter._lock.acquire(blocking=False)
+        checked.append(acquired)
+        if acquired:
+            limiter._lock.release()
+
+    monkeypatch.setattr(http_module.time, "sleep", fake_sleep)
+    limiter.wait()
+    assert checked == [True]

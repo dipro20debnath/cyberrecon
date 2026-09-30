@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
+from cyberrecon import DEFAULT_USER_AGENT
 from cyberrecon.utils.http import JsonFileCache, JsonHttpClient
 from cyberrecon.utils.validators import TargetValidationError, normalize_target
 
@@ -27,7 +28,7 @@ class WebMetadataCollector:
         self,
         timeout: float = 10,
         session: Optional[requests.Session] = None,
-        user_agent: str = "CyberRecon-Pro/1.0",
+        user_agent: str = DEFAULT_USER_AGENT,
         retries: int = 2,
         rate_limit: float = 0.0,
         cache: Optional[JsonFileCache] = None,

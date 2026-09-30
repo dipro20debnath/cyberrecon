@@ -5,12 +5,16 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
+
+from cyberrecon import DEFAULT_USER_AGENT
 
 
 class JsonFileCache:
@@ -29,14 +33,17 @@ class JsonFileCache:
 
     def get(self, key: str) -> Any:
         path = self._path(key)
-        if not path or not path.exists() or self.ttl == 0:
+        if not path or self.ttl == 0:
             return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if time.time() - float(payload["created_at"]) <= self.ttl:
-                return payload["value"]
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
+        with self._lock:
+            if not path.exists():
+                return None
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if time.time() - float(payload["created_at"]) <= self.ttl:
+                    return payload["value"]
+            except (OSError, ValueError, KeyError, TypeError):
+                return None
         return None
 
     def set(self, key: str, value: Any) -> None:
@@ -45,10 +52,30 @@ class JsonFileCache:
             return
         payload = {"created_at": time.time(), "value": value}
         with self._lock:
+            temp_path: Optional[Path] = None
+            file_descriptor: Optional[int] = None
             try:
-                path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                file_descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+                temp_path = Path(temp_name)
+                with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+                    file_descriptor = None
+                    json.dump(payload, handle, ensure_ascii=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                temp_path.replace(path)
             except (OSError, TypeError):
                 return
+            finally:
+                if file_descriptor is not None:
+                    try:
+                        os.close(file_descriptor)
+                    except OSError:
+                        pass
+                if temp_path is not None and temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
 
 
 class RateLimiter:
@@ -59,10 +86,12 @@ class RateLimiter:
 
     def wait(self) -> None:
         with self._lock:
-            delay = self.minimum_interval - (time.monotonic() - self._last_request)
-            if delay > 0:
-                time.sleep(delay)
-            self._last_request = time.monotonic()
+            now = time.monotonic()
+            scheduled = max(now, self._last_request + self.minimum_interval)
+            self._last_request = scheduled
+        delay = scheduled - now
+        if delay > 0:
+            time.sleep(delay)
 
 
 class JsonHttpClient:
@@ -71,7 +100,7 @@ class JsonHttpClient:
         timeout: float = 10,
         retries: int = 2,
         rate_limit: float = 0.0,
-        user_agent: str = "CyberRecon-Pro/1.0",
+        user_agent: str = DEFAULT_USER_AGENT,
         cache: Optional[JsonFileCache] = None,
         session: Optional[requests.Session] = None,
     ):

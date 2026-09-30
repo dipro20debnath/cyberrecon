@@ -27,10 +27,15 @@ def require_active_authorization(target: TargetInfo, config: Any, confirmed: boo
         raise ActiveScanError("Active mode requires --confirm-active")
     if not config.active_enabled:
         raise ActiveScanError("Active mode is disabled in config.yaml")
-    if not config.allowed_targets or target.value.lower() not in config.allowed_targets:
+    allowed_targets = {str(item).strip().lower().rstrip(".") for item in config.allowed_targets}
+    normalized_target = target.value.lower().rstrip(".")
+    if normalized_target not in allowed_targets:
         allowed = any(
-            item.startswith("*.") and target.is_domain and target.value.endswith(item[1:])
-            for item in config.allowed_targets
+            item.startswith("*.")
+            and target.is_domain
+            and normalized_target != item[2:]
+            and normalized_target.endswith(item[1:])
+            for item in allowed_targets
         )
         if not allowed:
             raise ActiveScanError("Target is not present in active.allowed_targets")
@@ -94,7 +99,15 @@ class PortScanner:
 
     def scan(self, target: str, ports: Iterable[int]) -> dict[str, Any]:
         info = normalize_target(target)
-        values = sorted({int(port) for port in ports if 1 <= int(port) <= 65535})
+        values_set: set[int] = set()
+        for port in ports:
+            try:
+                value = int(port)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= value <= 65535:
+                values_set.add(value)
+        values = sorted(values_set)
         if len(values) > 1000:
             raise ValueError("Port scan is limited to 1000 ports per request")
 

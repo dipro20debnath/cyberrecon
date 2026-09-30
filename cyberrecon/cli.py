@@ -86,6 +86,7 @@ def scan(
     only: str = typer.Option("", "--only", help="Comma-separated modules to run, for example dns,tls"),
     skip: str = typer.Option("", "--skip", help="Comma-separated modules to skip"),
     fail_on: str = typer.Option("", "--fail-on", help="Exit 1 when risk reaches low, medium, high or critical"),
+    fail_on_change: bool = typer.Option(False, "--fail-on-change", help="Exit 1 when any baseline change is detected"),
 ) -> None:
     """Run a reconnaissance scan and save a report."""
 
@@ -123,7 +124,7 @@ def scan(
     table.add_row("Report", str(path))
     console.print(table)
     try:
-        gate_reasons = evaluate_gate(results, fail_on=fail_on)
+        gate_reasons = evaluate_gate(results, fail_on=fail_on, fail_on_change=fail_on_change)
     except PolicyError as exc:
         console.print(f"[red]Policy failed:[/red] {exc}")
         raise typer.Exit(code=2) from exc

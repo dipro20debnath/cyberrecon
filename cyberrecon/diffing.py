@@ -137,7 +137,7 @@ def _web_paths(report: dict[str, Any]) -> list[dict[str, str]]:
                 values.add((f"security.txt:{key}", str(entry)))
     favicon = module.get("favicon", {})
     if isinstance(favicon, dict) and favicon.get("available"):
-        for key in ("format", "sha256", "mmh3"):
+        for key in ("format", "md5", "sha256", "mmh3"):
             if favicon.get(key) is not None:
                 values.add((f"favicon:{key}", str(favicon[key])))
     return [{"kind": kind, "value": value} for kind, value in sorted(values)]
