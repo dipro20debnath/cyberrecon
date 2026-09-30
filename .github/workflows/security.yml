@@ -55,6 +55,9 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
       - name: Review dependency changes
         uses: actions/dependency-review-action@v4
         with:
