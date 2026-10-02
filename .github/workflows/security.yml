@@ -55,7 +55,25 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - name: Check dependency graph support
+        id: dependency-graph
+        run: |
+          status="$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
+            | python -c 'import json,sys; print((json.load(sys.stdin).get("security_and_analysis") or {}).get("dependency_graph", {}).get("status", "unsupported"))')"
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out source
+        if: steps.dependency-graph.outputs.status == 'enabled'
+        uses: actions/checkout@v4
+
       - name: Review dependency changes
+        if: steps.dependency-graph.outputs.status == 'enabled'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
+
+      - name: Skip dependency review
+        if: steps.dependency-graph.outputs.status != 'enabled'
+        run: echo "Dependency graph is not enabled for this repository; skipping dependency review."
